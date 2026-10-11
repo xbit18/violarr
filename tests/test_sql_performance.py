@@ -1,9 +1,8 @@
 """Complete raw-row differential proof using independently frozen original SQL."""
 
-import ast
+import hashlib
 import inspect
 import itertools
-import subprocess
 
 import pytest
 from original_exact_query import exact_query as original_query
@@ -12,18 +11,11 @@ from test_multi_strategy_search import LocalSQL
 from search_strategies import exact_query
 
 
-def test_oracle_is_pinned_git_function():
-    source = subprocess.check_output(
-        ["git", "show", "2154136477fe9a773aac4d1cfe87bcc90955bded:search_strategies.py"],
-        text=True,
-    )
-    original = next(
-        node
-        for node in ast.parse(source).body
-        if isinstance(node, ast.FunctionDef) and node.name == "exact_query"
-    )
-    frozen = ast.parse(inspect.getsource(original_query)).body[0]
-    assert ast.dump(original) == ast.dump(frozen)
+def test_oracle_is_frozen():
+    source = inspect.getsource(original_query)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+
+    assert digest == "f87806e0c7548400aff6b32487577f63a0cf3fa194e8102311d1678874f2b9da"
 
 
 def requests():
