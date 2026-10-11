@@ -20,8 +20,8 @@ MAX_STRATEGIES = 32
 STAGES = {"input", "database", "processing", "serialization", "search", "merge"}
 EVIDENCE = {
     "field": {"title", "imdb", "tmdb", "season", "episode"},
-    "match_type": {"exact", "contains", "token", "browse"},
-    "source": {"torrent", "file"},
+    "match_type": {"exact", "contains", "token", "browse", "fuzzy"},
+    "source": {"torrent", "file", "pack_file"},
 }
 
 
@@ -218,7 +218,7 @@ class SearchCollector:
 
     def merged_begin(self, strategies):
         """Record attempted branches of one shared SQL execution, without timers."""
-        limitation = "Exact branch timings are unavailable; database timing covers the shared SQL."
+        limitation = "Branch timings are unavailable; database timing covers the shared SQL."
         if limitation not in self.report["limitations"]:
             self.report["limitations"].extend(
                 [
@@ -227,7 +227,13 @@ class SearchCollector:
                 ]
             )
         self.active_strategy = None
-        self.report["strategy"] = strategies[0] if len(strategies) == 1 else "multi_strategy"
+        self.report["strategy"] = (
+            next(iter(strategies), None) if len(strategies) <= 1 else "multi_strategy"
+        )
+        if any("fuzzy" in name for name in strategies):
+            limitation = "Fuzzy pools retain up to 2000 eligible parents per source by confidence, seeders and hash; pool counts precede pagination."
+            if limitation not in self.report["limitations"]:
+                self.report["limitations"].append(limitation)
         self.shared_strategies = {}
         for identifier in strategies:
             if len(self.report["strategies"]) >= MAX_STRATEGIES:
@@ -240,6 +246,8 @@ class SearchCollector:
                 # files carry IMDb, while TMDB always belongs to the parent.
                 "source": "file" if identifier.startswith("tv_file_imdb_") else "torrent",
             }
+            if isinstance(strategies, dict):
+                metadata = safe_evidence(strategies[identifier])
             entry = {
                 "identifier": identifier,
                 "status": "running",
@@ -250,6 +258,15 @@ class SearchCollector:
             }
             self.report["strategies"].append(entry)
             self.shared_strategies[identifier] = entry
+
+    def fuzzy_pools(self, pools):
+        from diagnostic_models import FuzzyPool
+
+        for identifier, pool in pools.items():
+            if identifier in self.shared_strategies:
+                self.shared_strategies[identifier]["fuzzy_pool"] = FuzzyPool.model_validate(
+                    pool
+                ).model_dump()
 
     def merged_window(self, rows, limit, offset, strategies, memberships, deduplicated):
         """Contributions are exclusive memberships in this fetched window.
@@ -279,14 +296,14 @@ class SearchCollector:
             for identifier in memberships[index]:
                 self.active_strategy = entries.get(identifier)
                 self.strategy_result(result, occurrence)
-                if identifier.startswith("tv_file_"):
+                if identifier.startswith("tv_file_") and (
+                    "_season" in identifier or "_episode" in identifier
+                ):
                     # Observed membership proves these predicates on the same
                     # qualifying file row. Do not expose request values as row
                     # metadata or infer episode evidence for season-only branches.
-                    fields = (
-                        ("season", "episode")
-                        if identifier.endswith("_season_episode")
-                        else ("season",)
+                    fields = tuple(
+                        field for field in ("season", "episode") if f"_{field}" in identifier
                     )
                     for field in fields:
                         self.strategy_result(
@@ -600,6 +617,9 @@ class ObservationFacade:
 
     def merged_begin(self, strategies):
         self._call("merged_begin", strategies)
+
+    def fuzzy_pools(self, pools):
+        self._call("fuzzy_pools", pools)
 
     def page(self, offset, indices):
         self._call("page", offset, indices)

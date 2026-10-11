@@ -29,13 +29,68 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from original_exact_query import exact_query as original_query  # noqa: E402
 
-from search_strategies import exact_query  # noqa: E402
+from search_strategies import CandidateRows, coverage_query, exact_query  # noqa: E402
 
 CASES = {
     "breaking-bad": ("tv", "tt0903747", 1396, 1, 1, 100, 0),
     "hanno": ("tv", "tt26545971", 273419, 1, 1, 100, 0),
 }
 GENERATORS = {"original": original_query, "optimized": exact_query}
+
+
+def coverage_cases():
+    """Read-only cases; no connection or credential access while constructing SQL."""
+    cases = {
+        "punctuation-883": ("tv", None, None, "Hanno ucciso l'Uomo Ragno - 883", 1, 2),
+        "tv-typo": ("tv", None, None, "Breaking Badd", 1, 1),
+        "movie-pack-imdb": ("movie", "tt2543164", None, None, None, None),
+        "short-title": ("movie", None, None, "883", None, None),
+        "ids-and-title": ("tv", "tt0903747", 1396, "Breaking Badd", 1, 1),
+        "broad-title": ("movie", None, None, "The", None, None),
+    }
+    return {name: coverage_query(*request, 100, 0) for name, request in cases.items()}
+
+
+def coverage_counts(cursor, generated, max_rows):
+    query, values, descriptors = generated
+    complete_query = query.replace("LIMIT %s OFFSET %s", "")
+    cursor.execute(
+        "SELECT COUNT(*) FROM (" + complete_query + ") results WHERE info_hash IS NOT NULL",
+        values[:-2],
+    )
+    total = cursor.fetchone()[0]
+    if total > max_rows:
+        raise ValueError("Coverage stream exceeds --max-rows; comparison aborted")
+    cursor.execute(complete_query, values[:-2])
+    complete = CandidateRows(cursor.fetchall(), descriptors)
+    cursor.execute(query, values)
+    page = CandidateRows(cursor.fetchall(), descriptors)
+    assert len({row[5] for row in complete}) == len(complete)
+    assert page == complete[values[-1] : values[-1] + values[-2]]
+
+    def order(item):
+        row, memberships = item
+        tier = min(
+            3
+            if name.endswith("_fuzzy")
+            else 2
+            if name.endswith("_text")
+            else 1
+            if name.startswith(("tv_file_", "movie_pack_"))
+            else 0
+            for name in memberships
+        )
+        return tier, row[2] is None, -(row[2] or 0), row[5]
+
+    paired = list(zip(complete, complete.memberships, strict=True))
+    assert paired == sorted(paired, key=order)
+    return {
+        "candidate_stream_total": total,
+        "returned_page": len(page),
+        "hashes_unique": True,
+        "tier_seeders_hash_order": True,
+        "scope": "After qualification and fuzzy pool caps; not all potential fuzzy matches.",
+    }
 
 
 def local_options(dsn):
@@ -159,8 +214,18 @@ def run(options, args):
                     (str(args.timeout_ms),),
                 )
                 cursor.execute("SELECT set_config('lock_timeout', '1000', true)")
-                for case, request in CASES.items():
-                    queries = {name: generator(*request) for name, generator in GENERATORS.items()}
+                coverage = getattr(args, "coverage", False)
+                if coverage:
+                    cursor.execute("SET LOCAL pg_trgm.strict_word_similarity_threshold = 0.6")
+                cases = (
+                    {case: {"coverage": query} for case, query in coverage_cases().items()}
+                    if coverage
+                    else {
+                        case: {name: generator(*request) for name, generator in GENERATORS.items()}
+                        for case, request in CASES.items()
+                    }
+                )
+                for case, queries in cases.items():
                     for name, (query, values, _) in queries.items():
                         print(
                             json.dumps(
@@ -177,7 +242,11 @@ def run(options, args):
                         json.dumps(
                             {
                                 "case": case,
-                                "comparison": compare_rows(cursor, request, args.max_rows),
+                                "comparison": (
+                                    coverage_counts(cursor, queries["coverage"], args.max_rows)
+                                    if coverage
+                                    else compare_rows(cursor, CASES[case], args.max_rows)
+                                ),
                             }
                         )
                     )
@@ -225,6 +294,11 @@ def parser():
     result.add_argument("--schema", required=True, help="Explicit authorized dataset schema")
     result.add_argument("--analyze", action="store_true")
     result.add_argument("--reviewed-plan", action="store_true")
+    result.add_argument(
+        "--coverage",
+        action="store_true",
+        help="Benchmark new coverage contracts, not equality with narrower legacy search",
+    )
     result.add_argument("--runs", type=int, choices=range(3, 10), default=5)
     result.add_argument("--warmups", type=int, choices=range(1, 4), default=2)
     result.add_argument(

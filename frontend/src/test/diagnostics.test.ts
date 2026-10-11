@@ -187,6 +187,37 @@ async function requests() {
 }
 
 describe('diagnostics', () => {
+  it('exports optional numeric fuzzy pool counts in reports and history without private fields', () => {
+    const r = reportV2()
+    const pool = { found: 2001, retained: 2000, omitted: 1, truncated: true }
+    const strategies = [
+      {
+        ...r.strategies[0],
+        fuzzy_pool: { ...pool, info_hash: 'private', confidence: 0.9, file_path: '/private' },
+      },
+    ]
+    const exported = JSON.parse(exportReport({ ...r, strategies } as unknown as SearchReport))
+    expect(exported.strategies[0].fuzzy_pool).toEqual(pool)
+    const history = JSON.parse(
+      exportHistory([{ ...entry(), strategies } as unknown as MonitoredRequest]),
+    )
+    expect(history.requests[0].strategies[0].fuzzy_pool).toEqual(pool)
+    const malformed = [
+      {
+        ...r.strategies[0],
+        fuzzy_pool: { found: { token: 'secret' }, retained: -1, omitted: 1.5, truncated: 'yes' },
+      },
+    ]
+    expect(
+      JSON.parse(exportReport({ ...r, strategies: malformed } as unknown as SearchReport))
+        .strategies[0].fuzzy_pool,
+    ).toEqual({})
+    expect(exportReport({ ...r, strategies } as unknown as SearchReport)).not.toContain('private')
+    expect(
+      JSON.parse(exportReport(r as unknown as SearchReport)).strategies[0].fuzzy_pool,
+    ).toBeUndefined()
+  })
+
   it.each([report, reportV2])(
     'rejects malformed export array leaves in both report versions',
     (fixture) => {
@@ -290,6 +321,43 @@ describe('diagnostics', () => {
     const exported = JSON.parse(exportReport(merged as unknown as SearchReport))
     expect(exported.strategies[0].duration_ms).toBeNull()
     expect(exported.strategies[0].metadata.source).toBe('file')
+  })
+
+  it('renders and exports fuzzy pack evidence without child identifiers or paths', async () => {
+    const r = reportV2()
+    const metadata = { field: 'title', match_type: 'fuzzy', source: 'pack_file' }
+    const covered = {
+      ...r,
+      strategies: [
+        { ...r.strategies[0], identifier: 'movie_pack_title_fuzzy', duration_ms: null, metadata },
+      ],
+      provenance: [
+        {
+          ...r.provenance[0],
+          match_evidence: [
+            {
+              strategy: 'movie_pack_title_fuzzy',
+              ...metadata,
+              file_path: '/private/child.mkv',
+              imdb_id: 'private-child-id',
+            },
+          ],
+        },
+      ],
+    }
+    fetchMock.mockResolvedValue(json(covered))
+    mount()
+    await run()
+    expect(screen.getByText('movie_pack_title_fuzzy')).toBeTruthy()
+    const serialized = exportReport(covered as unknown as SearchReport)
+    const projected = JSON.parse(serialized)
+    expect(projected.strategies[0].metadata).toEqual(metadata)
+    expect(projected.provenance[0].match_evidence[0]).toEqual({
+      strategy: 'movie_pack_title_fuzzy',
+      ...metadata,
+    })
+    expect(serialized).not.toContain('private-child-id')
+    expect(serialized).not.toContain('child.mkv')
   })
 
   it('renders v2 strategy executions, optional phases and unavailable provenance facts', async () => {

@@ -50,12 +50,12 @@ alcun report.
 
 ### Esecuzioni delle strategie e provenienza
 
-Il report v2 elenca ogni strategia per ID esatto applicabile alla finestra
-esaminata. Una query SQL condivisa unisce i rami; la durata appartiene alla fase
-database. Le durate indipendenti dei rami sono **Non disponibile** (`null`), non
-zero né tempi inventati. Se la query condivisa fallisce, i conteggi dei rami
-restano indisponibili. Errori nella raccolta diagnostica non modificano i
-risultati.
+Il report v2 elenca ogni strategia film/TV per ID, titolo, fuzzy o pacchetto
+applicabile alla finestra esaminata. Una query SQL condivisa unisce i rami; la
+durata appartiene alla fase database. Le durate indipendenti dei rami sono **Non
+disponibile** (`null`), non zero né tempi inventati. Se la query condivisa
+fallisce, i conteggi dei rami restano indisponibili. Errori nella raccolta
+diagnostica non modificano i risultati.
 
 **Provenienza dei risultati** raggruppa le osservazioni tramite un'identità
 opaca SHA256 derivata dall'info-hash memorizzato. L'identità resta stabile tra
@@ -66,15 +66,42 @@ corrispondenze nel database. Ogni strategia conta le proprie corrispondenze
 osservate nella finestra; le sovrapposizioni compaiono in più strategie. Il
 contributo univoco conta i candidati presenti solo in quella strategia nella
 finestra esaminata. Le evidenze sicure indicano IMDb/TMDB esatto e fonte
-torrent/file, non l'accettazione a valle.
+torrent/file/pack_file, oppure abbinamenti sul titolo, non l'accettazione a
+valle.
 
 Per gli ID esatti, deduplicazione indica che SQL ha ridotto più corrispondenze
 di ramo allo stesso hash; `EXISTS` evita la moltiplicazione per file senza
 contarli. L'inclusione viene confermata solo dopo la validazione XML effettiva;
 motivi di filtro e ranking restano nei dettagli delle release. La rilevanza
 resta `null`: i punteggi sono di preset/regole, non misure di fiducia
-nell'identità. Ricerche per titolo e generiche mantengono conteggi delle
-occorrenze e dati di provenienza non disponibili come prima.
+nell'identità. Le ricerche generiche mantengono conteggi delle occorrenze e dati
+di provenienza non disponibili come prima.
+
+I candidati film/TV usano quattro livelli: ID nel torrent, evidenza esatta nei
+file o nei film del pacchetto, titolo validato, poi fuzzy. Un TMDB qualificato
+tramite file resta nel secondo livello, ma la fonte dell'identità rimane
+`torrent`. Prevale la corrispondenza più forte; dentro ogni livello i seeder
+sono decrescenti (NULL in fondo), poi l'hash crescente. La similarità non ordina
+dentro un livello. Preset e regole restano locali alla finestra. Un abbinamento
+nel pacchetto non sostituisce i metadati del torrent; identificatori e percorsi
+dei figli non vengono esportati. Ogni fonte fuzzy conserva fino a 2000 torrent
+distinti idonei per confidenza del titolo, poi seeder e chiavi deterministiche;
+il superamento del limite non elimina l'intero insieme. I controlli e la scelta
+della migliore evidenza del file precedono la selezione. La confidenza riguarda
+solo il sottoinsieme conservato, non l'ordine finale dei livelli. Termini brevi
+o generici possono non usare il fuzzy. Un conteggio fuzzy nullo non prova
+l'assenza di abbinamenti approssimativi. Consulta i
+[limiti di copertura](../reference/torznab-capabilities).
+
+Quando osservato, `fuzzy_pool` nelle strategie del JSON di report e cronologia
+contiene `found` (torrent distinti idonei prima del limite), `retained` (dopo il
+limite), `omitted` (la differenza) e `truncated` (differenza positiva).
+Abbinamenti non validi non sono omissioni. Questi totali provengono dalla stessa
+query, precedono la paginazione e restano disponibili per pagine vuote; non
+vanno sommati tra finestre ripetute. Sono separati dai conteggi della finestra e
+dal troncamento del report per privacy o limiti dei dettagli. Valori
+assenti/null indicano dati non disponibili, non zero. Non si aggiungono
+confidenza, hash originali, percorsi dei figli o tempi indipendenti dei rami.
 
 ## Osservare le richieste dei client
 

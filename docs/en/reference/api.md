@@ -54,8 +54,11 @@ execution; unavailable deduplication, relevance and inclusion facts remain null.
 Exact-ID searches report observed window memberships, exclusive contributions,
 SQL deduplication and validated XML inclusion. Shared-query strategy
 `duration_ms` is nullable; the shared duration is measured only at the database
-stage. Match metadata may include allowlisted `source` (`torrent` or `file`).
-See
+stage. Match metadata may include allowlisted `source` (`torrent`, `file` or
+`pack_file`) and `match_type=fuzzy`. These are categorical observations, not
+child paths/identifiers or numeric confidence. Movie/TV title strategies run
+alongside IDs; counts remain limited to inspected windows and bounded fuzzy
+pools. See
 [diagnostic interpretation](../features/diagnostics#strategy-executions-and-provenance).
 
 ## `GET /webapi/status`

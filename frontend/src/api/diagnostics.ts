@@ -54,12 +54,18 @@ export interface StrategyExecution {
   candidates: number | null
   unique_contribution: number | null
   metadata: { field?: string | null; match_type?: string | null; source?: string | null }
+  fuzzy_pool?: { found: number; retained: number; omitted: number; truncated: boolean } | null
 }
 export interface Provenance {
   identity: string
   occurrences: string[]
   strategies: string[]
-  match_evidence: { strategy: string; field?: string | null; match_type?: string | null }[]
+  match_evidence: {
+    strategy: string
+    field?: string | null
+    match_type?: string | null
+    source?: string | null
+  }[]
   deduplicated: boolean | null
   relevance: number | null
   included: boolean | null
@@ -164,14 +170,25 @@ function projectStrategies(strategies: StrategyExecution[]) {
   return strategies.slice(0, 32).map((strategy) => ({
     ...pick(strategy, ['identifier', 'status', 'duration_ms', 'candidates', 'unique_contribution']),
     metadata: projectMetadata(strategy.metadata),
+    ...(strategy.fuzzy_pool == null ? {} : { fuzzy_pool: projectFuzzyPool(strategy.fuzzy_pool) }),
   }))
+}
+function projectFuzzyPool(value: unknown) {
+  return Object.fromEntries(
+    Object.entries(pick(value, ['found', 'retained', 'omitted', 'truncated'])).filter(
+      ([key, item]) =>
+        key === 'truncated'
+          ? typeof item === 'boolean'
+          : typeof item === 'number' && Number.isSafeInteger(item) && item >= 0,
+    ),
+  )
 }
 function projectMetadata(value: unknown) {
   const metadata = pick(value, ['field', 'match_type', 'source'])
   const allowed: Record<string, readonly unknown[]> = {
     field: [null, 'title', 'imdb', 'tmdb', 'season', 'episode'],
-    match_type: [null, 'exact', 'contains', 'token', 'browse'],
-    source: [null, 'torrent', 'file'],
+    match_type: [null, 'exact', 'contains', 'token', 'browse', 'fuzzy'],
+    source: [null, 'torrent', 'file', 'pack_file'],
   }
   return Object.fromEntries(
     Object.entries(metadata).filter(([key, item]) => allowed[key]!.includes(item)),

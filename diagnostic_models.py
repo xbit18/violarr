@@ -143,8 +143,15 @@ class RequestHistory(BaseModel):
 
 class MatchMetadata(BaseModel):
     field: Literal["title", "imdb", "tmdb", "season", "episode"] | None = None
-    match_type: Literal["exact", "contains", "token", "browse"] | None = None
-    source: Literal["torrent", "file"] | None = None
+    match_type: Literal["exact", "contains", "token", "browse", "fuzzy"] | None = None
+    source: Literal["torrent", "file", "pack_file"] | None = None
+
+
+class FuzzyPool(BaseModel):
+    found: int = Field(ge=0, strict=True)
+    retained: int = Field(ge=0, strict=True)
+    omitted: int = Field(ge=0, strict=True)
+    truncated: bool = Field(strict=True)
 
 
 class StrategyExecution(BaseModel):
@@ -154,6 +161,7 @@ class StrategyExecution(BaseModel):
     candidates: int | None = Field(default=None, ge=0)
     unique_contribution: int | None = Field(default=None, ge=0)
     metadata: MatchMetadata
+    fuzzy_pool: FuzzyPool | None = None
 
 
 class MatchEvidence(MatchMetadata):

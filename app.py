@@ -18,7 +18,7 @@ from release_language import should_force_english
 from result_processor import process_results
 from search_diagnostics import ACTIVE_COLLECTOR, ObservationFacade, SearchCollector, record_strategy
 from search_monitor import SearchMonitor, SearchMonitoringMiddleware
-from search_strategies import CandidateRows, query_exact
+from search_strategies import CandidateRows, query_coverage
 from settings import SettingsStore
 from snapshot_updater import install_snapshot_updater
 from version import APP_VERSION
@@ -235,41 +235,10 @@ def query_movie(
     limit: int,
     offset: int,
 ):
-    if imdb_id is not None or tmdb_id is not None:
-        return query_exact(get_conn, "movie", imdb_id, tmdb_id, None, None, limit, offset)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            if q:
-                record_strategy("movie_title")
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type = 'movie'
-                      AND title ILIKE %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        f"%{q}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-            else:
-                record_strategy("movie_empty")
-                return []
-
-            return cur.fetchall()
+    if q or imdb_id is not None or tmdb_id is not None:
+        return query_coverage(get_conn, "movie", imdb_id, tmdb_id, q, None, None, limit, offset)
+    record_strategy("movie_empty")
+    return []
 
 
 def query_tv(
@@ -281,80 +250,10 @@ def query_tv(
     limit: int,
     offset: int,
 ):
-    if imdb_id is not None or tmdb_id is not None:
-        return query_exact(get_conn, "tv", imdb_id, tmdb_id, season, episode, limit, offset)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Preserve the legacy title/season fallback, including its ignored ep.
-            if q is not None and season is not None:
-                record_strategy("tv_title_season")
-                season_sxx = f"S{season:02d}"
-                season_word = f"Season {season}"
-
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND title ILIKE %s
-                      AND (
-                            imdb_season = %s
-                            OR title ILIKE %s
-                            OR title ILIKE %s
-                      )
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        f"%{q}%",
-                        season,
-                        f"%{season_sxx}%",
-                        f"%{season_word}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            if q:
-                record_strategy("tv_title")
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND title ILIKE %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        f"%{q}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            record_strategy("tv_empty")
-            return []
+    if q or imdb_id is not None or tmdb_id is not None:
+        return query_coverage(get_conn, "tv", imdb_id, tmdb_id, q, season, episode, limit, offset)
+    record_strategy("tv_empty")
+    return []
 
 
 def make_caps():

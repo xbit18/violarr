@@ -29,20 +29,20 @@ runtime container.
 
 ## Modules
 
-| Module                  | Responsibility                                                                                 |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `app.py`                | FastAPI lifecycle, Torznab queries/XML, result-processing integration, static WebUI serving    |
-| `settings.py`           | Schema-v1 validation, atomic persistence, environment precedence, public secret masking        |
-| `result_processor.py`   | Italian presets and bounded custom score/exclusion rules                                       |
-| `webapi.py`             | Same-origin JSON status, settings, processing, Prowlarr, and diagnostics endpoints             |
-| `diagnostic_models.py`  | Strict bounded diagnostic inputs and report-v2 response contracts                              |
-| `search_diagnostics.py` | Optional request-scoped stage/window/candidate collection and structural redaction             |
-| `search_monitor.py`     | Failure-isolated Torznab observation and bounded thread-safe in-memory history                 |
-| `search_strategies.py`  | Complementary exact-ID SQL, file consistency guards, hash aggregation and observed memberships |
-| `prowlarr.py`           | `X-Api-Key` client, Generic Torznab schema derivation, test/create/idempotency                 |
-| `snapshot_updater.py`   | Snapshot discovery, validation, candidate restore, switch, rollback, updater state             |
-| `frontend/`             | Vue 3 WebUI source and shared product design tokens                                            |
-| `entrypoint.sh`         | PostgreSQL bootstrap, first snapshot restore, Uvicorn lifecycle, clean shutdown                |
+| Module                  | Responsibility                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `app.py`                | FastAPI lifecycle, Torznab queries/XML, result-processing integration, static WebUI serving     |
+| `settings.py`           | Schema-v1 validation, atomic persistence, environment precedence, public secret masking         |
+| `result_processor.py`   | Italian presets and bounded custom score/exclusion rules                                        |
+| `webapi.py`             | Same-origin JSON status, settings, processing, Prowlarr, and diagnostics endpoints              |
+| `diagnostic_models.py`  | Strict bounded diagnostic inputs and report-v2 response contracts                               |
+| `search_diagnostics.py` | Optional request-scoped stage/window/candidate collection and structural redaction              |
+| `search_monitor.py`     | Failure-isolated Torznab observation and bounded thread-safe in-memory history                  |
+| `search_strategies.py`  | Exact-ID and conservative title/pack SQL, consistency guards, tiered hash merge and memberships |
+| `prowlarr.py`           | `X-Api-Key` client, Generic Torznab schema derivation, test/create/idempotency                  |
+| `snapshot_updater.py`   | Snapshot discovery, validation, candidate restore, switch, rollback, updater state              |
+| `frontend/`             | Vue 3 WebUI source and shared product design tokens                                             |
+| `entrypoint.sh`         | PostgreSQL bootstrap, first snapshot restore, Uvicorn lifecycle, clean shutdown                 |
 
 ## Image build and startup
 
@@ -89,13 +89,22 @@ passes `limit` and `offset` directly to the database.
 
 Exact movie and TV searches run each supplied IMDb/TMDB identifier as a
 complementary strategy. NULL metadata does not contradict an identifier, but a
-populated conflicting identifier excludes a candidate. Title fallback runs only
-without identifiers; it is not a retry after an empty exact-ID search. Legacy
-IMDb normalization and title/season hints are unchanged.
+populated conflicting identifier excludes a candidate. Eligible movie/TV text
+strategies run alongside supplied identifiers, not only after an empty exact
+search. Generic search/browse remains unchanged. IMDb normalization and exact-only
+TV title/season hints are unchanged; qualified TV text now respects `ep`.
 
 `search_strategies.py` builds index-friendly exact branches combined by `UNION ALL`.
 SQL aggregates by `info_hash` before ordering or pagination, then joins back to
-the parent torrent. Ordering is seeders descending, NULL last, then hash ascending.
+the parent torrent. Production movie/TV ordering uses four tiers: exact parent
+torrent IMDb/TMDB, exact file/pack-child evidence, high-confidence validated text,
+then fuzzy. Within each tier, seeders descend with NULL last, then hash ascends.
+File-qualified TMDB belongs to the second tier because the file supplies episode
+qualification, although TMDB identity evidence still comes from the parent.
+Overlapping memberships remain recorded; their strongest tier determines order.
+Similarity never orders within a tier. All identifier searches use this stream,
+including exact-only TV. The exact-only SQL helper retains its frozen historical
+contract for differential tests, not production relevance ordering.
 Private membership flags are stripped before the seven-field processing/XML
 boundary. There is no independently paginated branch concatenation or dataset-wide
 Python merge. Processed 1000-candidate windows consume this deduplicated stream.
@@ -111,6 +120,58 @@ Valid child episode evidence can recover packs or mismatching parent episode
 metadata; it never replaces parent title, size, category, hash or magnet. There
 is no series equivalence or season remapping (including the distinct Hanno ucciso
 l'Uomo Ragno and Nord Sud Ovest Est identities).
+
+Movie pack strategies join `pack_files.pack_hash` to the parent torrent hash.
+Child IMDb identifies an individual film and may differ from the collection's
+parent identity. `pack_files` has no TMDB; parent TMDB is never attributed to a
+child. Child text is validated against the basename, not directory names, and
+excludes extras/trailers/subtitles and non-video suffixes. All request-derived
+text values are parameter-bound; regex grammar and token-count bounds are internal
+constants. Parent metadata and
+download links are never replaced with child values.
+
+Title queries are limited to 128 characters/12 alphanumeric tokens and require
+at least one discriminating token of three characters. Release-word-only queries
+are withheld; short titles remain searchable by ID. Literal token boundaries
+allow punctuation between words. Fuzzy eligibility additionally requires eight
+alphanumeric characters and a nonnumeric token of at least four characters.
+Existing GIN trigram indexes provide candidates via the `%>>` operator with
+transaction-local strict-word threshold 0.6; postvalidation requires strict-word
+similarity at least 0.75. TV additionally compares the leading series words at
+similarity 0.75 after stripping season/episode suffixes, never matching an episode
+name independently. Season/episode metadata must qualify the parent or one child
+row; title hints alone do not prove an episode for text searches.
+
+Each fuzzy source validates all discovered evidence before selecting up to 2000
+distinct eligible parents, independent of the requested page. Type/identity,
+episode, mixed-series, filename and confidence guards precede this cap. Repeated
+children reduce to their best eligible evidence per parent; multiplicity remains
+private diagnostic evidence. Overflow retains the best parents rather than
+discarding the source. Selection orders title confidence descending, then parent
+seeders descending (NULL last), hash ascending and child key ascending. Movie/pack
+confidence is strict-word similarity against the title/basename; TV confidence is
+the minimum of strict-word and leading-series prefix similarity. No separate
+release-year, quality or language bonuses are added. Confidence affects source
+retention only: final four-tier/seeders/hash ordering and exact/literal behavior
+remain unchanged.
+
+Optional strategy `fuzzy_pool` counts come from the same SQL execution: `found`
+is distinct eligible parents before the cap, `retained` is after the cap,
+`omitted` is their difference, and `truncated` indicates a positive difference.
+Invalid matches are not counted as omissions. These per-source/per-execution
+totals survive empty pages, are not summed across repeated windows, and are
+separate from fetched-window membership/filter counts. Unobserved counts are
+null/absent. A private singleton statistics envelope never becomes a public
+torrent row. Branch durations remain null; report-level truncation/replayability
+is not affected by source truncation. No confidence or child identifiers/paths
+are exported.
+These bounds do not limit index candidate discovery, final aggregation, sort or
+large-offset cost. No full-table similarity ORDER BY, new index, extension install,
+runtime schema mutation, or upstream data correction is introduced. Confidence
+sorting is limited to operator-discovered, guard-qualified evidence, not an
+unrestricted whole-table similarity sort. Confirmed PG16
+pg_trgm 1.6/index coverage applies to the current test schema, not all historical
+snapshots; unsupported schemas produce the existing sanitized database failure.
 
 Fetched rows are bounded; PostgreSQL aggregation and sorting are not bounded by
 the page size. Broad matches, large offsets and per-hash file consistency checks
@@ -232,8 +293,9 @@ Invalid diagnostic JSON produces a safe `422`; maintenance middleware can return
 ### Observation interface
 
 This interface observes an engine; it does not execute strategies or merge results.
-Exact-ID search executes one shared SQL statement per window, with complementary
-branches; legacy title/generic queries retain their existing single branch.
+Movie/TV coverage executes one shared result SQL statement per window, with
+complementary branches; fuzzy lookups also set a transaction-local threshold.
+Generic queries retain their existing single branch.
 
 | Event                                                                            | Contract                                                                                                                                                |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -269,11 +331,12 @@ file row. These categorical facts do not expose request values as retrieved meta
 Exact-ID candidate counts describe the fetched hash-deduplicated window. Branch
 counts are observed memberships, not pre-limit totals; unique contribution is the
 number belonging exclusively to that branch in the window. Safe evidence adds
-`source` (`torrent` or `file`) to exact IMDb/TMDB field metadata. SQL multiplicity
+`source` (`torrent`, `file`, or `pack_file`) to exact IMDb/TMDB or title field metadata.
+Fuzzy evidence is categorical, never a child path/ID or numeric confidence. SQL multiplicity
 records whether multiple branch matches were collapsed; `EXISTS` prevents file
 fan-out without inventing raw file counts. Inclusion is confirmed only after XML
 validation. Relevance remains `null`: processing `score` is a preset/rule score,
-not search confidence. Legacy title/generic counts include repeated occurrences
+not search confidence. Generic counts include repeated occurrences
 and keep unavailable provenance facts. Metadata-only monitoring computes branch
 window counts but never adapts/hashes rows or retains release/provenance records.
 

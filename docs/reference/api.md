@@ -56,8 +56,11 @@ rimangono null. Le ricerche per ID esatto riportano corrispondenze della
 finestra osservata, contributi esclusivi, deduplicazione SQL e inclusione XML
 convalidata. Il campo `duration_ms` delle strategie con query condivisa può
 essere null; la durata condivisa viene misurata solo nella fase database. I
-metadati possono includere `source` con valore ammesso `torrent` o `file`.
-Consulta
+metadati possono includere `source` con valore ammesso `torrent`, `file` o
+`pack_file`, e `match_type=fuzzy`. Sono osservazioni categoriali, non percorsi,
+identificatori dei figli o fiducia numerica. Le strategie film/TV per titolo
+operano insieme agli ID; i conteggi restano limitati alle finestre esaminate e
+agli insiemi fuzzy vincolati. Consulta
 [l'interpretazione diagnostica](../features/diagnostics#esecuzioni-delle-strategie-e-provenienza).
 
 ## `GET /webapi/status`
