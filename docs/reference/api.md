@@ -63,6 +63,26 @@ operano insieme agli ID; i conteggi restano limitati alle finestre esaminate e
 agli insiemi fuzzy vincolati. Consulta
 [l'interpretazione diagnostica](../features/diagnostics#esecuzioni-delle-strategie-e-provenienza).
 
+## Stato degli aggiornamenti database
+
+Il campo aggiuntivo `updater.phase` può essere `idle`, `checking`,
+`downloading`, `validating`, `restoring`, `switching`, `up_to_date`, `updated` o
+`failed`. Gli stati finali restano visibili fino alla prossima operazione; gli
+errori non includono eccezioni grezze. `updating` comprende il controllo.
+`next_check` è null durante un'operazione o quando i controlli automatici sono
+disabilitati.
+
+### Aggiornamento manuale
+
+`POST /webapi/database-update` (senza body) restituisce `202` con
+`{ "accepted": true }` dopo aver riservato il lock condiviso, prima del
+completamento in background. Funziona anche con aggiornamenti automatici
+disabilitati. Una richiesta duplicata restituisce `409` con
+`{ "detail": { "code": "update_busy", "message": "A database update is already in progress" } }`.
+Usa `GET /webapi/status` per l'esito; durante la manutenzione può restituire
+`503`. La route richiede una rete fidata come il resto della WebAPI senza
+autenticazione.
+
 ## `GET /webapi/status`
 
 L'endpoint verifica PostgreSQL ma non contatta Prowlarr. La sezione Prowlarr

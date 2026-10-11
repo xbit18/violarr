@@ -61,6 +61,25 @@ alongside IDs; counts remain limited to inspected windows and bounded fuzzy
 pools. See
 [diagnostic interpretation](../features/diagnostics#strategy-executions-and-provenance).
 
+## Database update progress
+
+`updater.phase` is additive: `idle`, `checking`, `downloading`, `validating`,
+`restoring`, `switching`, `up_to_date`, `updated`, or `failed`. Terminal phases
+remain visible until the next operation; errors contain no raw exception
+details. `updating` includes discovery. `next_check` is null during active work
+or when disabled.
+
+### Manual database update
+
+`POST /webapi/database-update` (no body) returns `202` with
+`{ "accepted": true }` after reserving the shared updater lock, before
+background work finishes. It works with automatic updates disabled. A duplicate
+returns `409` with
+`{ "detail": { "code": "update_busy", "message": "A database update is already in progress" } }`.
+Poll `GET /webapi/status` for the outcome; maintenance may temporarily return
+`503`. This route has the same trusted-network requirement as the rest of the
+unauthenticated WebAPI.
+
 ## `GET /webapi/status`
 
 This endpoint probes PostgreSQL but does not contact Prowlarr. Its Prowlarr

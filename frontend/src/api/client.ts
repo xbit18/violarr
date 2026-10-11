@@ -116,8 +116,10 @@ export function apiErrorMessage(error: unknown, fallback: string) {
 const json = (body: unknown): RequestInit => ({ method: 'PUT', body: JSON.stringify(body) })
 
 export const api = {
-  status: () => requestJson<AppStatus>('/webapi/status'),
-  settings: () => requestJson<PublicSettings>('/webapi/settings'),
+  status: (signal?: AbortSignal) => requestJson<AppStatus>('/webapi/status', { signal }),
+  triggerDatabaseUpdate: (signal?: AbortSignal) =>
+    requestJson<{ accepted: true }>('/webapi/database-update', { method: 'POST', signal }),
+  settings: (signal?: AbortSignal) => requestJson<PublicSettings>('/webapi/settings', { signal }),
   saveSettings: (settings: PublicSettings) =>
     requestJson<PublicSettings>('/webapi/settings', json(settings)),
   resultProcessing: () => requestJson<ResultProcessing>('/webapi/result-processing'),

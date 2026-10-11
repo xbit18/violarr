@@ -225,6 +225,18 @@ def create_webapi_router() -> APIRouter:
     def get_settings(request: Request):
         return _store(request).public()
 
+    @router.post("/database-update", status_code=202)
+    async def trigger_database_update(request: Request):
+        if not await request.app.state.snapshot_updater.trigger_manual():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "update_busy",
+                    "message": "A database update is already in progress",
+                },
+            )
+        return {"accepted": True}
+
     @router.put("/settings")
     def put_settings(request: Request, settings: Any = Body(...)):
         try:

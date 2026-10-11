@@ -46,6 +46,16 @@ export interface AppStatus {
     latest_version: string | null
     enabled: boolean
     updating: boolean
+    phase?:
+      | 'idle'
+      | 'checking'
+      | 'downloading'
+      | 'validating'
+      | 'restoring'
+      | 'switching'
+      | 'up_to_date'
+      | 'updated'
+      | 'failed'
     maintenance: boolean
     last_check: string | null
     next_check: string | null

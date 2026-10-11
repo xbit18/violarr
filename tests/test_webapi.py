@@ -16,6 +16,9 @@ class FakeUpdater:
     def reconfigure(self):
         self.reconfigured += 1
 
+    async def trigger_manual(self):
+        return True
+
     def status(self):
         return {
             "installed_version": "db-2026-01-01",
@@ -87,6 +90,65 @@ def web_client(tmp_path):
     app.include_router(create_webapi_router())
 
     return TestClient(app), app
+
+
+def test_manual_update_endpoint_accepts_or_reports_stable_busy(web_client):
+    client, app = web_client
+    response = client.post("/webapi/database-update")
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True}
+
+    async def busy():
+        return False
+
+    app.state.snapshot_updater.trigger_manual = busy
+    response = client.post("/webapi/database-update")
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {"code": "update_busy", "message": "A database update is already in progress"}
+    }
+
+
+def test_manual_http_acceptance_status_busy_and_maintenance_recovery(tmp_path, monkeypatch):
+    import threading
+    from contextlib import nullcontext
+
+    from snapshot_updater import install_snapshot_updater
+
+    store = SettingsStore(path=tmp_path / "settings.json", environ={})
+    settings = store.load()
+    settings["database_update"]["enabled"] = False
+    store.save(settings)
+    app = FastAPI()
+    app.state.settings_store = store
+    app.state.database_probe = lambda: True
+    updater = install_snapshot_updater(app, store)
+    updater.state_file = tmp_path / "version"
+    app.include_router(create_webapi_router())
+    entered, release = threading.Event(), threading.Event()
+
+    def discover():
+        entered.set()
+        assert release.wait(5)
+        raise RuntimeError("secret private path")
+
+    monkeypatch.setattr(updater, "get_latest_snapshot", discover)
+    monkeypatch.setattr(updater, "_admin_connection", lambda: nullcontext(None))
+    monkeypatch.setattr(updater, "_drop_database", lambda *args: None)
+    with TestClient(app) as client:
+        try:
+            assert client.post("/webapi/database-update").status_code == 202
+            assert entered.wait(5)
+            assert client.get("/webapi/status").json()["updater"]["phase"] == "checking"
+            assert client.post("/webapi/database-update").status_code == 409
+            updater.maintenance.set()
+            assert client.get("/webapi/status").status_code == 503
+            updater.maintenance.clear()
+            assert client.get("/webapi/status").status_code == 200
+        finally:
+            release.set()
+    assert updater.status()["phase"] == "failed"
+    assert updater.status()["last_error"] == "Snapshot update failed"
 
 
 def test_status_contains_stable_health_summary_without_secrets(web_client):
