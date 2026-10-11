@@ -4,8 +4,20 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import get_args
 
 import pytest
+
+
+@pytest.mark.parametrize("page", ["en/reference/api.md", "reference/api.md"])
+def test_diagnostic_api_reference_matches_report_contract(page):
+    from diagnostic_models import SearchReport
+
+    (version,) = get_args(SearchReport.model_fields["report_version"].annotation)
+    text = (Path(__file__).resolve().parents[1] / "docs" / page).read_text()
+    assert f"Report v{version};" in text
+    for field in ["strategies", "provenance", "search", "merge"]:
+        assert f"`{field}`" in text
 
 
 @pytest.mark.parametrize(

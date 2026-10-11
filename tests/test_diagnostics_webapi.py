@@ -222,6 +222,41 @@ def test_diagnostic_validation_never_echoes_rejected_secrets(client):
     assert "password=secret" not in toggle.text
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("POST", "/webapi/diagnostics/search"), ("PUT", "/webapi/diagnostics/monitoring")],
+)
+@pytest.mark.parametrize("body", [b"\xff", b'{"q":'])
+def test_diagnostic_malformed_json_uses_safe_validation_contract(client, method, path, body):
+    response = client.request(
+        method, path, content=body, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "code": "invalid_parameters",
+            "message": "Invalid diagnostic parameters",
+        }
+    }
+
+
+def test_diagnostic_body_normalization_leaves_other_errors_untouched(client, monkeypatch):
+    from fastapi import HTTPException
+
+    ordinary = client.put(
+        "/webapi/settings", content=b"\xff", headers={"Content-Type": "application/json"}
+    )
+    assert ordinary.status_code == 400
+
+    def fail(parameters):
+        raise HTTPException(status_code=409, detail="Application conflict")
+
+    monkeypatch.setattr(backend.app.state, "diagnostic_search", fail)
+    response = client.post("/webapi/diagnostics/search", json={})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Application conflict"}
+
+
 def test_detailed_concurrent_reports_are_request_scoped(client):
     with ThreadPoolExecutor(max_workers=8) as pool:
         reports = list(

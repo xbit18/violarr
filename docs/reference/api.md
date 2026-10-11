@@ -28,7 +28,7 @@ Durante la breve sostituzione del database, il middleware può restituire HTTP
 
 | Metodo           | Percorso                         | Contratto                                                        |
 | ---------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `POST`           | `/webapi/diagnostics/search`     | Report v1; le fasi possono fallire anche con HTTP `200`          |
+| `POST`           | `/webapi/diagnostics/search`     | Report v2; le fasi possono fallire anche con HTTP `200`          |
 | `GET` / `PUT`    | `/webapi/diagnostics/monitoring` | `{enabled,capacity,count}`; PUT accetta solo `{enabled:boolean}` |
 | `GET` / `DELETE` | `/webapi/diagnostics/requests`   | `{requests:[...]}`; DELETE svuota la cronologia                  |
 
@@ -48,6 +48,11 @@ di arrivo, senza release o impostazioni. Per rieseguire usa un nuovo POST con i
 parametri originali solo se `replayable`; non esiste un endpoint replay/export
 separato. Non c'è autenticazione: consulta
 [diagnostica e privacy](../features/diagnostics).
+
+Il report v2 aggiunge le esecuzioni `strategies` e la `provenance` per identità
+del risultato, con fasi opzionali `search` e `merge`. Descrivono l'esecuzione
+osservata; i dati non disponibili su deduplicazione, rilevanza e inclusione
+rimangono null.
 
 ## `GET /webapi/status`
 

@@ -887,7 +887,7 @@ def execute_search(
 ):
     if collector is not None and not isinstance(collector, ObservationFacade):
         collector = ObservationFacade(collector)
-    token = ACTIVE_COLLECTOR.set(collector) if collector is not None else None
+    token = ACTIVE_COLLECTOR.set(collector)
     try:
         imdb_id = normalize_imdb(imdbid)
         if collector is not None:
@@ -935,8 +935,7 @@ def execute_search(
             if collector is not None:
                 collector.finish()
         finally:
-            if token is not None:
-                ACTIVE_COLLECTOR.reset(token)
+            ACTIVE_COLLECTOR.reset(token)
 
 
 @app.get("/api")

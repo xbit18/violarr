@@ -28,7 +28,7 @@ During the brief snapshot database switch, middleware can return HTTP `503` with
 
 | Method           | Path                             | Contract                                                         |
 | ---------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `POST`           | `/webapi/diagnostics/search`     | Report v1; stages may fail despite HTTP `200`                    |
+| `POST`           | `/webapi/diagnostics/search`     | Report v2; stages may fail despite HTTP `200`                    |
 | `GET` / `PUT`    | `/webapi/diagnostics/monitoring` | `{enabled,capacity,count}`; PUT accepts only `{enabled:boolean}` |
 | `GET` / `DELETE` | `/webapi/diagnostics/requests`   | `{requests:[...]}`; DELETE clears history                        |
 
@@ -47,6 +47,10 @@ interpretation limitations. Monitored requests are arrival-newest-first metadata
 without releases or settings. Replay is a new POST with original parameters only
 when `replayable`; there is no separate replay/export endpoint. There is no
 authentication: see [diagnostics and privacy](../features/diagnostics).
+
+Report v2 adds `strategies` execution records and `provenance` per result
+identity, with optional `search` and `merge` stages. These describe observed
+execution; unavailable deduplication, relevance and inclusion facts remain null.
 
 ## `GET /webapi/status`
 

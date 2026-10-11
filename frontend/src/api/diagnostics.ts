@@ -259,10 +259,14 @@ export function exportReport(report: SearchReport): string {
         'reason',
         'score',
       ]),
-      score_rules: release.score_rules.slice(0, 100),
+      score_rules: release.score_rules
+        .filter(
+          (value) => typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value),
+        )
+        .slice(0, 100),
     })),
     errors: report.errors.slice(0, 4).map((error) => pick(error, ['stage', 'code', 'message'])),
-    limitations: report.limitations.slice(0, 8),
+    limitations: report.limitations.filter((value) => typeof value === 'string').slice(0, 8),
     ...(report.report_version === 2
       ? {
           strategies: projectStrategies(report.strategies),

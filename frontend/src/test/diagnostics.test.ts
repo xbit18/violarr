@@ -187,6 +187,49 @@ async function requests() {
 }
 
 describe('diagnostics', () => {
+  it.each([report, reportV2])(
+    'rejects malformed export array leaves in both report versions',
+    (fixture) => {
+      const valid = fixture()
+      const malformed = {
+        ...valid,
+        releases: valid.releases.map((release) => ({
+          ...release,
+          score_rules: [
+            { api_key: 'LEAF_SECRET_123' },
+            [2],
+            '3',
+            true,
+            null,
+            NaN,
+            Infinity,
+            1.5,
+            0,
+            2,
+          ],
+        })),
+        limitations: [
+          { credentials: 'LIMIT_SECRET_123' },
+          ['nested'],
+          null,
+          1,
+          'Window-local ranking.',
+        ],
+      }
+      const exported = exportReport(malformed as unknown as SearchReport)
+      const parsed = JSON.parse(exported)
+      expect(exported).not.toContain('LEAF_SECRET_123')
+      expect(exported).not.toContain('LIMIT_SECRET_123')
+      expect(parsed.releases[0].score_rules).toEqual([0, 2])
+      expect(parsed.limitations).toEqual(['Window-local ranking.'])
+      const preserved = JSON.parse(exportReport(valid as unknown as SearchReport))
+      expect(
+        preserved.releases.map((release: { score_rules: number[] }) => release.score_rules),
+      ).toEqual(valid.releases.map((release) => release.score_rules))
+      expect(preserved.limitations).toEqual(valid.limitations)
+    },
+  )
+
   beforeEach(() => {
     useLocale().setLocale('en')
     enabled = false

@@ -26,6 +26,24 @@ class _SafeDiagnosticsRoute(APIRoute):
 
         async def handle(request):
             try:
+                if self.path.startswith("/webapi/diagnostics/") and self.body_field is not None:
+                    content_type = (
+                        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    )
+                    if (
+                        not content_type
+                        or content_type == "application/json"
+                        or (
+                            content_type.startswith("application/")
+                            and content_type.endswith("+json")
+                        )
+                    ) and await request.body():
+                        # Parse before FastAPI converts decoding failures to generic HTTP 400.
+                        # Catch only JSON body errors, never errors raised by the endpoint.
+                        try:
+                            await request.json()
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            raise RequestValidationError([]) from None
                 return await original(request)
             except RequestValidationError:
                 if not self.path.startswith("/webapi/diagnostics/"):

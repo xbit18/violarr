@@ -34,6 +34,40 @@ def collector():
     return factory()
 
 
+def test_collector_free_nested_real_query_preserves_outer_strategy(store, monkeypatch):
+    class Connection:
+        nested = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self):
+            return self
+
+        def execute(self, sql, values):
+            if not self.nested:
+                self.nested = True
+                outer = backend.ACTIVE_COLLECTOR.get()
+                backend.execute_search(t="movie", imdbid="tt123", collector=None)
+                assert backend.ACTIVE_COLLECTOR.get() is outer
+
+        def fetchall(self):
+            return []
+
+    # Share the recursion guard between the real generic and movie queries.
+    connection = Connection()
+    monkeypatch.setattr(backend, "get_conn", lambda: connection)
+    observed = collector()
+    backend.execute_search(q="outer", collector=observed)
+    assert observed.report["strategy"] == "generic_title"
+    assert [item["identifier"] for item in observed.report["strategies"]] == ["generic_title"]
+    assert observed.report["strategies"][0]["status"] == "success"
+    assert backend.ACTIVE_COLLECTOR.get() is None
+
+
 @pytest.mark.parametrize("preset", ["unfiltered", "italian_only", "italian_preferred", "custom"])
 def test_shared_search_exact_xml_and_candidate_identity(store, monkeypatch, preset):
     settings = store.load()
