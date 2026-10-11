@@ -13,6 +13,7 @@ const italianSidebar = [
     text: 'Usare Violarr',
     items: [
       { text: 'Panoramica WebUI', link: '/configuration/webui' },
+      { text: 'Diagnostica', link: '/features/diagnostics' },
       {
         text: 'Aggiornamenti database',
         link: '/configuration/database-updates',
@@ -64,6 +65,7 @@ const englishLabels: Record<string, string> = {
   'Prima configurazione': 'First setup',
   'Collegare Prowlarr': 'Connect Prowlarr',
   'Panoramica WebUI': 'WebUI overview',
+  Diagnostica: 'Diagnostics',
   'Aggiornamenti database': 'Database updates',
   'Elaborazione risultati': 'Result processing',
   'Regole personalizzate': 'Custom rules',

@@ -77,6 +77,7 @@ const links = [
   ['/database', 'navigation.database'],
   ['/result-processing', 'navigation.results'],
   ['/prowlarr', 'Prowlarr'],
+  ['/diagnostics', 'common.diagnostics'],
   ['/advanced', 'navigation.advanced'],
 ] as const
 </script>

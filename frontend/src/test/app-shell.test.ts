@@ -23,6 +23,7 @@ describe('mobile application shell', () => {
         { path: '/result-processing', component: { template: '<p>Results</p>' } },
         { path: '/prowlarr', component: { template: '<p>Prowlarr</p>' } },
         { path: '/advanced', component: { template: '<p>Advanced</p>' } },
+        { path: '/diagnostics', component: { template: '<p>Diagnostics</p>' } },
       ],
     })
     await router.push('/')
@@ -30,6 +31,9 @@ describe('mobile application shell', () => {
     render(AppShell, { global: { plugins: [router] } })
     const menu = screen.getByRole('button', { name: 'Apri navigazione' })
     await fireEvent.click(menu)
+    expect(screen.getByRole('link', { name: 'Diagnostica' }).getAttribute('href')).toBe(
+      '/diagnostics',
+    )
     const links = screen.getByRole('navigation').querySelectorAll('a')
     expect(document.activeElement).toBe(links[0])
     menu.focus()

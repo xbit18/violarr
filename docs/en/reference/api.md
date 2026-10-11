@@ -24,6 +24,34 @@ The service exposes three HTTP surfaces on port `8000`.
 During the brief snapshot database switch, middleware can return HTTP `503` with
 `Retry-After: 5` for any route before its normal handler runs.
 
+## Diagnostics
+
+| Method           | Path                             | Contract                                                         |
+| ---------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `POST`           | `/webapi/diagnostics/search`     | Report v2; stages may fail despite HTTP `200`                    |
+| `GET` / `PUT`    | `/webapi/diagnostics/monitoring` | `{enabled,capacity,count}`; PUT accepts only `{enabled:boolean}` |
+| `GET` / `DELETE` | `/webapi/diagnostics/requests`   | `{requests:[...]}`; DELETE clears history                        |
+
+Search accepts only `t` (`search`, `movie`, `tvsearch`), `q`, `imdbid`,
+`tmdbid`, `season`, `ep`, `cat`, `limit` and `offset`. Strings: at most 512
+characters; TMDb/season/episode: integers ±1000000000 or null; limit: 1–200
+(default 100); offset: 0–1000000 (default 0). Unknown fields, wrong types and
+out-of-range values return safe `422` detail
+`{code:invalid_parameters,message:Invalid diagnostic parameters}`.
+
+The report includes versions, timestamp, original/normalized parameters,
+strategy, input/database/processing/serialization stage status/timing,
+candidate, excluded, retained, outside-page, selected and returned counts,
+windows, settings, releases, errors, duration, `truncated`, `replayable` and
+interpretation limitations. Monitored requests are arrival-newest-first metadata
+without releases or settings. Replay is a new POST with original parameters only
+when `replayable`; there is no separate replay/export endpoint. There is no
+authentication: see [diagnostics and privacy](../features/diagnostics).
+
+Report v2 adds `strategies` execution records and `provenance` per result
+identity, with optional `search` and `merge` stages. These describe observed
+execution; unavailable deduplication, relevance and inclusion facts remain null.
+
 ## `GET /webapi/status`
 
 This endpoint probes PostgreSQL but does not contact Prowlarr. Its Prowlarr

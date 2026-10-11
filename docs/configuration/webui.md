@@ -9,11 +9,16 @@ Apri `http://HOST:8000/` per controllare Violarr e modificarne le impostazioni.
 - **Aggiornamenti database** gestisce i controlli. Di norma: ogni 24 ore.
 - **Elaborazione risultati** gestisce preset e regole. Inizia senza filtri.
 - **Prowlarr** salva la connessione. Lo stato atteso è **Connesso**.
+- **[Diagnostica](../features/diagnostics)** esamina ricerche e richieste
+  Torznab, le riesegue con lo stato attuale ed esporta report locali con
+  anteprima privacy.
 - **Avanzate** è una vista in sola lettura e non richiede azioni.
 
 ## Salvare e verificare
 
-- Ogni pagina salva solo quando premi il relativo pulsante **Salva**.
+- Le impostazioni persistenti vengono salvate solo con il relativo pulsante
+  **Salva**. Il monitoraggio diagnostico cambia immediatamente e resta solo in
+  memoria.
 - Attendi il messaggio di conferma prima di cambiare pagina.
 - La chiave API salvata non viene mostrata: usa **Sostituisci chiave** solo per
   cambiarla.

@@ -24,6 +24,36 @@ Il servizio espone tre superfici HTTP sulla porta `8000`.
 Durante la breve sostituzione del database, il middleware può restituire HTTP
 `503` con `Retry-After: 5` prima dell'handler normale di qualsiasi route.
 
+## Diagnostica
+
+| Metodo           | Percorso                         | Contratto                                                        |
+| ---------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `POST`           | `/webapi/diagnostics/search`     | Report v2; le fasi possono fallire anche con HTTP `200`          |
+| `GET` / `PUT`    | `/webapi/diagnostics/monitoring` | `{enabled,capacity,count}`; PUT accetta solo `{enabled:boolean}` |
+| `GET` / `DELETE` | `/webapi/diagnostics/requests`   | `{requests:[...]}`; DELETE svuota la cronologia                  |
+
+La ricerca accetta solo `t` (`search`, `movie`, `tvsearch`), `q`, `imdbid`,
+`tmdbid`, `season`, `ep`, `cat`, `limit` e `offset`. Stringhe: massimo 512
+caratteri; TMDb/stagione/episodio: interi ±1000000000 o null; limite: 1–200
+(predefinito 100); offset: 0–1000000 (predefinito 0). Campi sconosciuti, tipi
+errati o valori fuori limite restituiscono `422` con dettaglio sicuro
+`{code:invalid_parameters,message:Invalid diagnostic parameters}`.
+
+Il report include versioni, timestamp, parametri originali/normalizzati,
+strategia, fasi input/database/processing/serialization con stato/durata,
+conteggi candidati, esclusi, mantenuti, fuori pagina, selezionati e restituiti,
+finestre, impostazioni, release, errori, durata, `truncated`, `replayable` e
+limiti interpretativi. Le richieste monitorate sono metadati in ordine inverso
+di arrivo, senza release o impostazioni. Per rieseguire usa un nuovo POST con i
+parametri originali solo se `replayable`; non esiste un endpoint replay/export
+separato. Non c'è autenticazione: consulta
+[diagnostica e privacy](../features/diagnostics).
+
+Il report v2 aggiunge le esecuzioni `strategies` e la `provenance` per identità
+del risultato, con fasi opzionali `search` e `merge`. Descrivono l'esecuzione
+osservata; i dati non disponibili su deduplicazione, rilevanza e inclusione
+rimangono null.
+
 ## `GET /webapi/status`
 
 L'endpoint verifica PostgreSQL ma non contatta Prowlarr. La sezione Prowlarr

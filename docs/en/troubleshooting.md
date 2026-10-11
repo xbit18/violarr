@@ -46,6 +46,17 @@ direction: Prowlarr → Violarr.
 
 ## Expected releases are missing
 
+Open **[Diagnostics](./features/diagnostics) → Search** to distinguish lookup,
+filtering and validated XML output without changing settings. If the problem
+only appears in clients, enable monitoring in **Requests**, inspect actual
+parameters and replay them. Replay uses current state, not historical
+conditions.
+
+The local snapshot may differ from live Stremio results. No candidates in
+inspected windows does not prove absence from the whole database. A valid
+Torznab response alone cannot explain Sonarr/Radarr rejection. Before sharing a
+report, review titles and search terms in its preview.
+
 - `italian_only` and custom exclusion rules are hard filters.
 - Ranking is local to 1000-row database windows.
 - Result processing cannot guarantee Radarr/Sonarr selection.

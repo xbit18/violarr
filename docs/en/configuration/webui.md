@@ -9,11 +9,15 @@ Open `http://HOST:8000/` to check Violarr and change its settings.
 - **Database updates** manages checks. The normal choice is every 24 hours.
 - **Result processing** manages presets and rules. Start unfiltered.
 - **Prowlarr** saves the connection. The expected state is **Connected**.
+- **[Diagnostics](../features/diagnostics)** inspects searches and Torznab
+  requests, replays against current state and exports local reports with a
+  privacy preview.
 - **Advanced** is read-only and normally requires no action.
 
 ## Save and verify
 
-- Each page saves only when you select its **Save** button.
+- Persistent settings save only when you select their **Save** button.
+  Diagnostic monitoring changes immediately and remains in memory only.
 - Wait for the confirmation message before leaving the page.
 - A saved API key is not displayed. Use **Replace key** only to change it.
 

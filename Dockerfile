@@ -61,6 +61,7 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 COPY VERSION app.py snapshot_updater.py settings.py result_processor.py release_language.py prowlarr.py version.py webapi.py entrypoint.sh ./
+COPY diagnostic_models.py search_diagnostics.py search_monitor.py ./
 COPY --from=frontend-build /build/frontend/dist /app/frontend-dist
 
 RUN chmod +x /app/entrypoint.sh

@@ -16,6 +16,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from release_language import should_force_english
 from result_processor import process_results
+from search_diagnostics import ACTIVE_COLLECTOR, ObservationFacade, SearchCollector, record_strategy
+from search_monitor import SearchMonitor, SearchMonitoringMiddleware
 from settings import SettingsStore
 from snapshot_updater import install_snapshot_updater
 from version import APP_VERSION
@@ -25,6 +27,8 @@ SETTINGS_STORE = SettingsStore()
 app = FastAPI(version=APP_VERSION)
 app.state.settings_store = SETTINGS_STORE
 install_snapshot_updater(app, SETTINGS_STORE)
+app.state.search_monitor = SearchMonitor()
+app.add_middleware(SearchMonitoringMiddleware, monitor=app.state.search_monitor)
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "host.docker.internal"),
@@ -172,6 +176,7 @@ def query_generic(
     with get_conn() as conn:
         with conn.cursor() as cur:
             if not q:
+                record_strategy("generic_browse")
                 cur.execute(
                     """
                     SELECT
@@ -195,6 +200,7 @@ def query_generic(
                 )
 
             else:
+                record_strategy("generic_title")
                 cur.execute(
                     """
                     SELECT
@@ -231,6 +237,7 @@ def query_movie(
     with get_conn() as conn:
         with conn.cursor() as cur:
             if imdb_id:
+                record_strategy("movie_imdb")
                 cur.execute(
                     """
                     SELECT
@@ -256,6 +263,7 @@ def query_movie(
                 )
 
             elif tmdb_id is not None:
+                record_strategy("movie_tmdb")
                 cur.execute(
                     """
                     SELECT
@@ -281,6 +289,7 @@ def query_movie(
                 )
 
             elif q:
+                record_strategy("movie_title")
                 cur.execute(
                     """
                     SELECT
@@ -306,6 +315,7 @@ def query_movie(
                 )
 
             else:
+                record_strategy("movie_empty")
                 return []
 
             return cur.fetchall()
@@ -327,6 +337,7 @@ def query_tv(
             # imdbid + season + episode
             #
             if imdb_id is not None and season is not None and episode is not None:
+                record_strategy("tv_imdb_season_episode")
                 cur.execute(
                     """
                     SELECT
@@ -363,6 +374,7 @@ def query_tv(
             # imdbid + season
             #
             if imdb_id is not None and season is not None:
+                record_strategy("tv_imdb_season")
                 season_sxx = f"S{season:02d}"
                 season_word = f"Season {season}"
 
@@ -411,6 +423,7 @@ def query_tv(
             # q + season
             #
             if q is not None and season is not None:
+                record_strategy("tv_title_season")
                 season_sxx = f"S{season:02d}"
                 season_word = f"Season {season}"
 
@@ -452,6 +465,7 @@ def query_tv(
             # 4. Ricerca tramite IMDb senza stagione
             #
             if imdb_id is not None:
+                record_strategy("tv_imdb")
                 cur.execute(
                     """
                     SELECT
@@ -482,6 +496,7 @@ def query_tv(
             # 5. Ricerca generica per titolo
             #
             if q:
+                record_strategy("tv_title")
                 cur.execute(
                     """
                     SELECT
@@ -508,6 +523,7 @@ def query_tv(
 
                 return cur.fetchall()
 
+            record_strategy("tv_empty")
             return []
 
 
@@ -800,10 +816,24 @@ def make_rss(rows, *, subtitle_language_correction=False):
     )
 
 
-def query_processed(query, query_args, limit, offset):
+def query_processed(query, query_args, limit, offset, collector=None):
     processing = SETTINGS_STORE.load()["result_processing"]
+    if collector is not None:
+        collector.processing_settings(processing)
     if processing["preset"] == "unfiltered":
-        return query(*query_args, limit, offset)
+        if collector is None:
+            return query(*query_args, limit, offset)
+        collector.begin("database")
+        rows = query(*query_args, limit, offset)
+        collector.window(rows, limit, offset)
+        collector.complete()
+        collector.begin("processing")
+        observer = collector.observer(offset, processing["subtitle_language_correction"])
+        for index, row in enumerate(rows):
+            observer(index, row, None, 0, [])
+        collector.page(offset, list(range(len(rows))))
+        collector.complete()
+        return rows
 
     # Rank within fixed, non-overlapping database windows. This keeps memory
     # bounded, supports arbitrary offsets, and fetches both windows when a page
@@ -817,21 +847,100 @@ def query_processed(query, query_args, limit, offset):
         last_window + RESULT_CANDIDATE_WINDOW,
         RESULT_CANDIDATE_WINDOW,
     ):
+        if collector is not None:
+            collector.begin("database")
         rows = query(*query_args, RESULT_CANDIDATE_WINDOW, window_offset)
+        observer = None
+        if collector is not None:
+            collector.window(rows, RESULT_CANDIDATE_WINDOW, window_offset)
+            collector.complete()
+            collector.begin("processing")
+            observer = collector.observer(window_offset, processing["subtitle_language_correction"])
         processed = process_results(
             rows,
             processing["preset"],
             processing["custom_rules"],
             subtitle_language_correction=processing["subtitle_language_correction"],
+            observer=observer,
         )
         local_start = max(offset - window_offset, 0)
         local_end = min(request_end - window_offset, RESULT_CANDIDATE_WINDOW)
         page.extend(processed[local_start:local_end])
+        if collector is not None:
+            collector.page(window_offset, observer.order[local_start:local_end])
+            collector.complete()
     return page
+
+
+def execute_search(
+    *,
+    t="search",
+    q=None,
+    imdbid=None,
+    tmdbid=None,
+    season=None,
+    ep=None,
+    cat=None,
+    limit=100,
+    offset=0,
+    collector=None,
+):
+    if collector is not None and not isinstance(collector, ObservationFacade):
+        collector = ObservationFacade(collector)
+    token = ACTIVE_COLLECTOR.set(collector)
+    try:
+        imdb_id = normalize_imdb(imdbid)
+        if collector is not None:
+            collector.begin("input")
+            original = dict(
+                t=t,
+                q=q,
+                imdbid=imdbid,
+                tmdbid=tmdbid,
+                season=season,
+                ep=ep,
+                cat=cat,
+                limit=limit,
+                offset=offset,
+            )
+            collector.inputs(original, {**original, "imdbid": imdb_id})
+        subtitle_language_correction = SETTINGS_STORE.load()["result_processing"][
+            "subtitle_language_correction"
+        ]
+        if collector is not None:
+            collector.serialization_settings(subtitle_language_correction)
+            collector.complete()
+        if t == "search":
+            query, args = query_generic, (q,)
+        elif t == "movie":
+            query, args = query_movie, (imdb_id, tmdbid, q)
+        elif t == "tvsearch":
+            query, args = query_tv, (imdb_id, q, season, ep)
+        else:
+            return make_rss([])
+        rows = query_processed(query, args, limit, offset, collector)
+        if collector is not None:
+            collector.begin("serialization")
+        xml = make_rss(rows, subtitle_language_correction=subtitle_language_correction)
+        if collector is not None:
+            if collector.serialized(xml):
+                collector.complete()
+        return xml
+    except Exception:
+        if collector is not None:
+            collector.fail()
+        raise
+    finally:
+        try:
+            if collector is not None:
+                collector.finish()
+        finally:
+            ACTIVE_COLLECTOR.reset(token)
 
 
 @app.get("/api")
 def torznab(
+    request: Request = None,
     t: str = Query("search"),
     q: str | None = None,
     imdbid: str | None = None,
@@ -857,54 +966,40 @@ def torznab(
             media_type="application/xml",
         )
 
-    imdb_id = normalize_imdb(imdbid)
-    subtitle_language_correction = SETTINGS_STORE.load()["result_processing"][
-        "subtitle_language_correction"
-    ]
-
-    if t == "search":
-        rows = query_processed(
-            query_generic,
-            (q,),
-            limit,
-            offset,
-        )
-
-        return Response(
-            content=make_rss(rows, subtitle_language_correction=subtitle_language_correction),
-            media_type="application/xml",
-        )
-
-    if t == "movie":
-        rows = query_processed(
-            query_movie,
-            (imdb_id, tmdbid, q),
-            limit,
-            offset,
-        )
-
-        return Response(
-            content=make_rss(rows, subtitle_language_correction=subtitle_language_correction),
-            media_type="application/xml",
-        )
-
-    if t == "tvsearch":
-        rows = query_processed(
-            query_tv,
-            (imdb_id, q, season, ep),
-            limit,
-            offset,
-        )
-
-        return Response(
-            content=make_rss(rows, subtitle_language_correction=subtitle_language_correction),
-            media_type="application/xml",
-        )
-
     return Response(
-        content=make_rss([]),
+        content=execute_search(
+            t=t,
+            q=q,
+            imdbid=imdbid,
+            tmdbid=tmdbid,
+            season=season,
+            ep=ep,
+            cat=cat,
+            limit=limit,
+            offset=offset,
+            collector=getattr(request.state, "search_collector", None)
+            if request is not None
+            else None,
+        ),
         media_type="application/xml",
     )
 
 
+def diagnostic_search(parameters):
+    collector = SearchCollector()
+    snapshot = None
+    try:
+        snapshot = app.state.snapshot_updater.status().get("installed_version")
+    except Exception:
+        pass
+    collector.versions(APP_VERSION, snapshot)
+    try:
+        execute_search(**parameters, collector=collector)
+    except Exception:
+        # The report already records a safe partial-stage error; never expose exc.
+        pass
+    return collector.snapshot()
+
+
+app.state.diagnostic_search = diagnostic_search
 install_frontend(app)

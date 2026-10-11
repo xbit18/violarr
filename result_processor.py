@@ -73,34 +73,48 @@ def process_results(
     custom_rules: Any,
     *,
     subtitle_language_correction: bool = False,
+    observer=None,
 ) -> list[Sequence[Any]]:
     if preset not in PRESETS:
         raise ResultProcessingError("unknown result-processing preset")
 
     materialized = list(rows)
-    if preset == "unfiltered":
-        return materialized
-    if preset == "italian_only":
-        return [
-            row
-            for row in materialized
-            if _has_explicit_italian_marker(_value(row, 0), subtitle_language_correction)
-        ]
-    if preset == "italian_preferred":
-        return _stable_rank(
-            materialized,
-            lambda row: _italian_score(row, subtitle_language_correction),
-        )
-
-    rules = validate_rules(custom_rules)
-    enabled = [rule for rule in rules if rule["enabled"]]
-    excludes = [rule for rule in enabled if rule["action"] == "exclude"]
-    scores = [rule for rule in enabled if rule["action"] == "score"]
-    included = [row for row in materialized if not any(_matches(row, rule) for rule in excludes)]
-    return _stable_rank(
-        included,
-        lambda row: sum(rule["score"] for rule in scores if _matches(row, rule)),
-    )
+    rules = validate_rules(custom_rules) if preset == "custom" else []
+    excludes = [
+        (i, rule) for i, rule in enumerate(rules) if rule["enabled"] and rule["action"] == "exclude"
+    ]
+    scores = [
+        (i, rule) for i, rule in enumerate(rules) if rule["enabled"] and rule["action"] == "score"
+    ]
+    ranked = []
+    for index, row in enumerate(materialized):
+        reason = None
+        score = 0
+        matched_scores = []
+        if preset == "italian_only":
+            if not _has_explicit_italian_marker(_value(row, 0), subtitle_language_correction):
+                reason = "missing_italian_marker"
+        elif preset == "italian_preferred":
+            score = _italian_score(row, subtitle_language_correction)
+        elif preset == "custom":
+            for rule_index, rule in excludes:
+                if _matches(row, rule):
+                    reason = f"custom_rule:{rule_index}"
+                    break
+            if reason is None:
+                for rule_index, rule in scores:
+                    if _matches(row, rule):
+                        score += rule["score"]
+                        if observer is not None:
+                            matched_scores.append(rule_index)
+        if reason is None:
+            ranked.append((index, row, score))
+        if observer is not None:
+            observer(index, row, reason, score, matched_scores)
+    ranked.sort(key=lambda entry: -entry[2])
+    if observer is not None:
+        observer.order = [entry[0] for entry in ranked]
+    return [entry[1] for entry in ranked]
 
 
 def _stable_rank(rows, score):
