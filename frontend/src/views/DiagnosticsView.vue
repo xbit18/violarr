@@ -82,7 +82,7 @@ function parameters(): SearchInput {
     t: form.t,
     q: form.q || null,
     imdbid: form.t === 'search' ? null : form.imdbid || null,
-    tmdbid: form.t === 'movie' ? integer(form.tmdbid, -1e9, 1e9, true) : null,
+    tmdbid: form.t !== 'search' ? integer(form.tmdbid, -1e9, 1e9, true) : null,
     season: form.t === 'tvsearch' ? integer(form.season, -1e9, 1e9, true) : null,
     ep: form.t === 'tvsearch' ? integer(form.ep, -1e9, 1e9, true) : null,
     cat: form.cat || null,
@@ -344,7 +344,7 @@ onBeforeUnmount(() => {
             <label v-if="form.t !== 'search'"
               >IMDb ID<input v-model="form.imdbid" maxlength="512" type="text"
             /></label>
-            <label v-if="form.t === 'movie'"
+            <label v-if="form.t !== 'search'"
               >TMDb ID<input
                 v-model="form.tmdbid"
                 type="number"
@@ -460,7 +460,11 @@ onBeforeUnmount(() => {
             <h3>{{ strategy.identifier }}</h3>
             <p>
               <span class="badge">{{ t(`diagnostics.status.${strategy.status}`) }}</span> ·
-              {{ strategy.duration_ms.toFixed(1) }} ms
+              {{
+                strategy.duration_ms === null
+                  ? t('common.notAvailable')
+                  : `${strategy.duration_ms.toFixed(1)} ms`
+              }}
             </p>
             <p>
               {{ t('diagnostics.count.candidates') }}:
@@ -685,7 +689,12 @@ onBeforeUnmount(() => {
           <div v-for="(strategy, index) in inspected.strategies ?? []" :key="index">
             <p>
               {{ strategy.identifier }} · {{ t(`diagnostics.status.${strategy.status}`) }} ·
-              {{ strategy.duration_ms.toFixed(1) }} ms · {{ t('diagnostics.count.candidates') }}:
+              {{
+                strategy.duration_ms === null
+                  ? t('common.notAvailable')
+                  : `${strategy.duration_ms.toFixed(1)} ms`
+              }}
+              · {{ t('diagnostics.count.candidates') }}:
               {{ strategy.candidates ?? t('common.notAvailable') }} ·
               {{ t('diagnostics.uniqueContribution') }}:
               {{ strategy.unique_contribution ?? t('common.notAvailable') }}

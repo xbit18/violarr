@@ -29,19 +29,20 @@ runtime container.
 
 ## Modules
 
-| Module                  | Responsibility                                                                              |
-| ----------------------- | ------------------------------------------------------------------------------------------- |
-| `app.py`                | FastAPI lifecycle, Torznab queries/XML, result-processing integration, static WebUI serving |
-| `settings.py`           | Schema-v1 validation, atomic persistence, environment precedence, public secret masking     |
-| `result_processor.py`   | Italian presets and bounded custom score/exclusion rules                                    |
-| `webapi.py`             | Same-origin JSON status, settings, processing, Prowlarr, and diagnostics endpoints          |
-| `diagnostic_models.py`  | Strict bounded diagnostic inputs and report-v2 response contracts                           |
-| `search_diagnostics.py` | Optional request-scoped stage/window/candidate collection and structural redaction          |
-| `search_monitor.py`     | Failure-isolated Torznab observation and bounded thread-safe in-memory history              |
-| `prowlarr.py`           | `X-Api-Key` client, Generic Torznab schema derivation, test/create/idempotency              |
-| `snapshot_updater.py`   | Snapshot discovery, validation, candidate restore, switch, rollback, updater state          |
-| `frontend/`             | Vue 3 WebUI source and shared product design tokens                                         |
-| `entrypoint.sh`         | PostgreSQL bootstrap, first snapshot restore, Uvicorn lifecycle, clean shutdown             |
+| Module                  | Responsibility                                                                                 |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `app.py`                | FastAPI lifecycle, Torznab queries/XML, result-processing integration, static WebUI serving    |
+| `settings.py`           | Schema-v1 validation, atomic persistence, environment precedence, public secret masking        |
+| `result_processor.py`   | Italian presets and bounded custom score/exclusion rules                                       |
+| `webapi.py`             | Same-origin JSON status, settings, processing, Prowlarr, and diagnostics endpoints             |
+| `diagnostic_models.py`  | Strict bounded diagnostic inputs and report-v2 response contracts                              |
+| `search_diagnostics.py` | Optional request-scoped stage/window/candidate collection and structural redaction             |
+| `search_monitor.py`     | Failure-isolated Torznab observation and bounded thread-safe in-memory history                 |
+| `search_strategies.py`  | Complementary exact-ID SQL, file consistency guards, hash aggregation and observed memberships |
+| `prowlarr.py`           | `X-Api-Key` client, Generic Torznab schema derivation, test/create/idempotency                 |
+| `snapshot_updater.py`   | Snapshot discovery, validation, candidate restore, switch, rollback, updater state             |
+| `frontend/`             | Vue 3 WebUI source and shared product design tokens                                            |
+| `entrypoint.sh`         | PostgreSQL bootstrap, first snapshot restore, Uvicorn lifecycle, clean shutdown                |
 
 ## Image build and startup
 
@@ -85,6 +86,41 @@ ElementTree Torznab RSS serialization
 `t=search`, `t=movie`, and `t=tvsearch` retain the v1.0 parameters, categories,
 limits, offset behavior, and XML item shape. The default `unfiltered` preset
 passes `limit` and `offset` directly to the database.
+
+Exact movie and TV searches run each supplied IMDb/TMDB identifier as a
+complementary strategy. NULL metadata does not contradict an identifier, but a
+populated conflicting identifier excludes a candidate. Title fallback runs only
+without identifiers; it is not a retry after an empty exact-ID search. Legacy
+IMDb normalization and title/season hints are unchanged.
+
+`search_strategies.py` builds index-friendly exact branches combined by `UNION ALL`.
+SQL aggregates by `info_hash` before ordering or pagination, then joins back to
+the parent torrent. Ordering is seeders descending, NULL last, then hash ascending.
+Private membership flags are stripped before the seven-field processing/XML
+boundary. There is no independently paginated branch concatenation or dataset-wide
+Python merge. Processed 1000-candidate windows consume this deduplicated stream.
+
+For TV season/episode requests, additional file-backed strategies require the
+same `files` row to provide the qualifying season and episode, joined to its
+parent by `info_hash`. IMDb file matches require that row's exact IMDb identity;
+TMDB file matches require the parent's exact TMDB identity because files have no
+TMDB column. NULL file IMDb is allowed with parent TMDB evidence, not as an
+independent IMDb match. Populated disagreement between request, parent and files,
+or between files of the same torrent, excludes that parent conservatively.
+Valid child episode evidence can recover packs or mismatching parent episode
+metadata; it never replaces parent title, size, category, hash or magnet. There
+is no series equivalence or season remapping (including the distinct Hanno ucciso
+l'Uomo Ragno and Nord Sud Ovest Est identities).
+
+Fetched rows are bounded; PostgreSQL aggregation and sorting are not bounded by
+the page size. Broad matches, large offsets and per-hash file consistency checks
+can be expensive. Historical ID/hash/composite indexes motivate the exact branches,
+but do not certify current snapshots or query plans. Offline SQLite execution tests
+cover relational structure with dialect adaptation; an opt-in temporary-table
+PostgreSQL test requires an explicitly configured loopback DSN. PostgreSQL execution,
+EXPLAIN, large-dataset performance, Docker runtime and Python 3.12 validation remain
+separate checks when those local environments are unavailable. No schema migration
+or snapshot download is part of this feature.
 
 ### WebUI and WebAPI
 
@@ -179,7 +215,7 @@ Actual search exceptions still propagate. A narrow `ContextVar` carries only the
 facade to existing SQL branch markers; nested `finally` resets it even if observation
 fails. It does not change normal ordering, ignored parameters, subtitle
 correction, settings precedence, or snapshot-switch behavior. `cat` remains accepted
-but unused by queries; TV searches still ignore `tmdbid`.
+but unused by queries; TV searches now use `tmdbid` alongside `imdbid`.
 
 Report v2 carries original/normalized allowlisted parameters, a legacy strategy summary,
 four stage statuses/timings, inspected windows, processing settings/indexed rules,
@@ -193,23 +229,29 @@ reports with HTTP `200`: consumers must inspect statuses/errors, not HTTP succes
 Invalid diagnostic JSON produces a safe `422`; maintenance middleware can return
 `503` before diagnostic handlers run.
 
-### Observation interface for future strategy implementers
+### Observation interface
 
 This interface observes an engine; it does not execute strategies or merge results.
-Production still executes its existing single query branch per fixed SQL window.
+Exact-ID search executes one shared SQL statement per window, with complementary
+branches; legacy title/generic queries retain their existing single branch.
 
-| Event                                                                            | Contract                                                                                                                                      |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `strategy_begin(identifier, metadata=None)`                                      | Lowercase symbolic identifier (64 characters maximum); metadata accepts only `field` and `match_type` enum values, never search values or SQL |
-| `strategy_result(DiagnosticResult, occurrence, metadata=None)`                   | Associate the active execution with an opaque identity and distinct occurrence; does not remove duplicate rows                                |
-| `strategy_complete(status="success", candidates=None, unique_contribution=None)` | Report observed candidate count and success/partial/failed status; ownership stays unavailable unless explicitly observed                     |
-| `result_facts(result, deduplicated=None, relevance=None, included=None)`         | Optional facts from an actual engine observation, never inferred from filter scores or the number of occurrences                              |
-| `begin("search")` / `begin("merge")`, `complete()`                               | Optional phases alongside the legacy input/database/processing/serialization phases; omitted unless emitted                                   |
+| Event                                                                            | Contract                                                                                                                                                |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strategy_begin(identifier, metadata=None)`                                      | Lowercase symbolic identifier (64 characters maximum); metadata accepts only `field`, `match_type` and `source` enum values, never search values or SQL |
+| `strategy_result(DiagnosticResult, occurrence, metadata=None)`                   | Associate the active execution with an opaque identity and distinct occurrence; does not remove duplicate rows                                          |
+| `strategy_complete(status="success", candidates=None, unique_contribution=None)` | Report observed candidate count and success/partial/failed status; ownership stays unavailable unless explicitly observed                               |
+| `result_facts(result, deduplicated=None, relevance=None, included=None)`         | Optional facts from an actual engine observation, never inferred from filter scores or the number of occurrences                                        |
+| `begin("search")` / `begin("merge")`, `complete()`                               | Optional phases alongside the legacy input/database/processing/serialization phases; omitted unless emitted                                             |
 
 Pass these events through `ObservationFacade`, not a raw collector. Existing branch
 markers call `record_strategy()`; `window()` completes that execution and adapts rows
 only for detailed diagnostics. `DiagnosticResult.from_row()` is the sole seven-field
 row adapter for observation; query, processing and RSS paths keep their original rows.
+Exact-ID queries call `merged_begin()` before shared SQL, then `merged_window()`
+with private observed memberships and SQL multiplicity flags. No active legacy
+strategy receives merged rows. Branch timing is `null`, since independent execution
+was not measured; the database stage owns shared timing. Failed shared SQL records
+failed attempts with unavailable counts, while observer faults remain failure-isolated.
 Settings events capture the existing two reads in order: XML settings first, then
 processing settings. No extra settings reads, queries or filtering decisions occur.
 
@@ -219,12 +261,21 @@ or magnet; it remains stable across row order and window offsets. This permits
 correlation, not anonymization. Occurrence IDs (`window_offset:index`) remain separate
 for duplicate-row exclusion, ranking and pagination decisions. Provenance aggregates
 strategy identifiers and bounded categorical match evidence per identity.
-Current execution does **not** deduplicate, merge, or compute search relevance, so
-deduplicated/relevance/included provenance facts and unique contribution are `null`.
-Processing `score` retains its existing filter/preset meaning, not search relevance.
-Candidate counts count inspected occurrences, including duplicates; they are not
-unique-result counts. Synthetic tests emit overlap, partial/failure and deduplication
-facts without adding production strategies.
+Evidence `source` names the table that supplies the matched field, not the branch
+origin. File IMDb identity comes from `file`; TMDB identity always comes from
+`torrent`, even in a file-backed branch. Observed file memberships separately
+record exact `season` and, for episode branches, `episode` evidence from the same
+file row. These categorical facts do not expose request values as retrieved metadata.
+Exact-ID candidate counts describe the fetched hash-deduplicated window. Branch
+counts are observed memberships, not pre-limit totals; unique contribution is the
+number belonging exclusively to that branch in the window. Safe evidence adds
+`source` (`torrent` or `file`) to exact IMDb/TMDB field metadata. SQL multiplicity
+records whether multiple branch matches were collapsed; `EXISTS` prevents file
+fan-out without inventing raw file counts. Inclusion is confirmed only after XML
+validation. Relevance remains `null`: processing `score` is a preset/rule score,
+not search confidence. Legacy title/generic counts include repeated occurrences
+and keep unavailable provenance facts. Metadata-only monitoring computes branch
+window counts but never adapts/hashes rows or retains release/provenance records.
 
 The browser accepts and exports v1 and v2 reports using version-aware scalar allowlists;
 the server emits v2. Request-history export retains its independent version `1` and

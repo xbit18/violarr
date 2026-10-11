@@ -18,6 +18,7 @@ from release_language import should_force_english
 from result_processor import process_results
 from search_diagnostics import ACTIVE_COLLECTOR, ObservationFacade, SearchCollector, record_strategy
 from search_monitor import SearchMonitor, SearchMonitoringMiddleware
+from search_strategies import CandidateRows, query_exact
 from settings import SettingsStore
 from snapshot_updater import install_snapshot_updater
 from version import APP_VERSION
@@ -234,61 +235,11 @@ def query_movie(
     limit: int,
     offset: int,
 ):
+    if imdb_id is not None or tmdb_id is not None:
+        return query_exact(get_conn, "movie", imdb_id, tmdb_id, None, None, limit, offset)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if imdb_id:
-                record_strategy("movie_imdb")
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type = 'movie'
-                      AND imdb_id = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        limit,
-                        offset,
-                    ),
-                )
-
-            elif tmdb_id is not None:
-                record_strategy("movie_tmdb")
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type = 'movie'
-                      AND tmdb_id = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        tmdb_id,
-                        limit,
-                        offset,
-                    ),
-                )
-
-            elif q:
+            if q:
                 record_strategy("movie_title")
                 cur.execute(
                     """
@@ -326,102 +277,15 @@ def query_tv(
     q: str | None,
     season: int | None,
     episode: int | None,
+    tmdb_id: int | None,
     limit: int,
     offset: int,
 ):
+    if imdb_id is not None or tmdb_id is not None:
+        return query_exact(get_conn, "tv", imdb_id, tmdb_id, season, episode, limit, offset)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            #
-            # 1. Episodio preciso:
-            #
-            # imdbid + season + episode
-            #
-            if imdb_id is not None and season is not None and episode is not None:
-                record_strategy("tv_imdb_season_episode")
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND imdb_id = %s
-                      AND imdb_season = %s
-                      AND imdb_episode = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        season,
-                        episode,
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 2. Ricerca stagione tramite IMDb:
-            #
-            # imdbid + season
-            #
-            if imdb_id is not None and season is not None:
-                record_strategy("tv_imdb_season")
-                season_sxx = f"S{season:02d}"
-                season_word = f"Season {season}"
-
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND imdb_id = %s
-                      AND (
-                            imdb_season = %s
-                            OR (
-                                imdb_season IS NULL
-                                AND (
-                                    title ILIKE %s
-                                    OR title ILIKE %s
-                                )
-                            )
-                      )
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        season,
-                        f"%{season_sxx}%",
-                        f"%{season_word}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 3. Ricerca per titolo + stagione:
-            #
-            # q + season
-            #
+            # Preserve the legacy title/season fallback, including its ignored ep.
             if q is not None and season is not None:
                 record_strategy("tv_title_season")
                 season_sxx = f"S{season:02d}"
@@ -461,40 +325,6 @@ def query_tv(
 
                 return cur.fetchall()
 
-            #
-            # 4. Ricerca tramite IMDb senza stagione
-            #
-            if imdb_id is not None:
-                record_strategy("tv_imdb")
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND imdb_id = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 5. Ricerca generica per titolo
-            #
             if q:
                 record_strategy("tv_title")
                 cur.execute(
@@ -566,7 +396,7 @@ def make_caps():
     )
     tv_search.set(
         "supportedParams",
-        "q,season,ep,imdbid",
+        "q,season,ep,imdbid,tmdbid",
     )
 
     movie_search = SubElement(
@@ -816,6 +646,15 @@ def make_rss(rows, *, subtitle_language_correction=False):
     )
 
 
+def observe_window(collector, rows, limit, offset):
+    if isinstance(rows, CandidateRows):
+        collector.merged_window(
+            rows, limit, offset, rows.strategies, rows.memberships, rows.deduplicated
+        )
+    else:
+        collector.window(rows, limit, offset)
+
+
 def query_processed(query, query_args, limit, offset, collector=None):
     processing = SETTINGS_STORE.load()["result_processing"]
     if collector is not None:
@@ -825,7 +664,7 @@ def query_processed(query, query_args, limit, offset, collector=None):
             return query(*query_args, limit, offset)
         collector.begin("database")
         rows = query(*query_args, limit, offset)
-        collector.window(rows, limit, offset)
+        observe_window(collector, rows, limit, offset)
         collector.complete()
         collector.begin("processing")
         observer = collector.observer(offset, processing["subtitle_language_correction"])
@@ -852,7 +691,7 @@ def query_processed(query, query_args, limit, offset, collector=None):
         rows = query(*query_args, RESULT_CANDIDATE_WINDOW, window_offset)
         observer = None
         if collector is not None:
-            collector.window(rows, RESULT_CANDIDATE_WINDOW, window_offset)
+            observe_window(collector, rows, RESULT_CANDIDATE_WINDOW, window_offset)
             collector.complete()
             collector.begin("processing")
             observer = collector.observer(window_offset, processing["subtitle_language_correction"])
@@ -915,7 +754,7 @@ def execute_search(
         elif t == "movie":
             query, args = query_movie, (imdb_id, tmdbid, q)
         elif t == "tvsearch":
-            query, args = query_tv, (imdb_id, q, season, ep)
+            query, args = query_tv, (imdb_id, q, season, ep, tmdbid)
         else:
             return make_rss([])
         rows = query_processed(query, args, limit, offset, collector)

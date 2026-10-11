@@ -52,7 +52,13 @@ separato. Non c'è autenticazione: consulta
 Il report v2 aggiunge le esecuzioni `strategies` e la `provenance` per identità
 del risultato, con fasi opzionali `search` e `merge`. Descrivono l'esecuzione
 osservata; i dati non disponibili su deduplicazione, rilevanza e inclusione
-rimangono null.
+rimangono null. Le ricerche per ID esatto riportano corrispondenze della
+finestra osservata, contributi esclusivi, deduplicazione SQL e inclusione XML
+convalidata. Il campo `duration_ms` delle strategie con query condivisa può
+essere null; la durata condivisa viene misurata solo nella fase database. I
+metadati possono includere `source` con valore ammesso `torrent` o `file`.
+Consulta
+[l'interpretazione diagnostica](../features/diagnostics#esecuzioni-delle-strategie-e-provenienza).
 
 ## `GET /webapi/status`
 

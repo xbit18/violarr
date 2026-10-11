@@ -51,6 +51,12 @@ authentication: see [diagnostics and privacy](../features/diagnostics).
 Report v2 adds `strategies` execution records and `provenance` per result
 identity, with optional `search` and `merge` stages. These describe observed
 execution; unavailable deduplication, relevance and inclusion facts remain null.
+Exact-ID searches report observed window memberships, exclusive contributions,
+SQL deduplication and validated XML inclusion. Shared-query strategy
+`duration_ms` is nullable; the shared duration is measured only at the database
+stage. Match metadata may include allowlisted `source` (`torrent` or `file`).
+See
+[diagnostic interpretation](../features/diagnostics#strategy-executions-and-provenance).
 
 ## `GET /webapi/status`
 

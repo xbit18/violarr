@@ -8,7 +8,7 @@ does not change the search or check whether downstream clients accept releases.
 
 1. Open **Diagnostics → Search**, the default view.
 2. Choose generic, movie or TV search and enter the query.
-3. Expand **Advanced parameters** for IMDb, TMDb (movies only), season/episode
+3. Expand **Advanced parameters** for IMDb/TMDb (movies and TV), season/episode
    (TV only), categories, limit and offset. Limit: 1–200; offset: 0–1000000.
    Categories are accepted but do not filter current queries. Diagnostics
    preserves that behavior without widening searches or disabling filters.
@@ -45,24 +45,29 @@ retain only observed information; an HTTP error may produce no report at all.
 
 ### Strategy executions and provenance
 
-Report v2 lists each observed strategy execution with status, duration and
-candidate count. A partial or failed execution does not prove that no matching
-release exists. The current engine still uses one existing query branch per
-inspected window; this report format does not add search strategies or widen
-results.
+Report v2 lists each applicable exact-ID strategy per inspected window. One
+shared SQL execution merges the branches; its duration belongs to the database
+stage. Independent branch durations are **Not available** (`null`), not zero or
+invented timings. A failed shared query leaves branch counts unavailable.
+Failures in observation do not change normal search results.
 
 **Result provenance** groups observations by an opaque SHA256 identity derived
 from the stored info-hash. It is stable across ordering/windows, but distinct
 occurrence IDs preserve duplicate-row filtering and pagination decisions.
-Candidate counts include repeated occurrences, not just unique identities.
-Strategy identifiers and categorical match evidence describe the observed
-sources, not downstream acceptance.
+Exact-ID candidate counts describe the fetched, hash-deduplicated window, not
+all database matches. Each strategy count is the observed membership of that
+window; overlaps appear in multiple strategies. Unique contribution counts
+candidates belonging only to that strategy in the inspected window. Safe match
+evidence identifies exact IMDb/TMDB and torrent/file sources, not downstream
+acceptance.
 
-Unique contribution, deduplication, relevance and identity-level inclusion show
-**Not available** (`null`) unless explicitly observed. The current engine does
-not deduplicate, merge or calculate search relevance; the existing processing
-score is a separate preset/rule score. A repeated identity is not evidence of
-deduplication.
+For exact-ID searches, deduplicated indicates that SQL collapsed multiple branch
+matches for this hash; file `EXISTS` prevents fan-out without counting raw
+files. Inclusion is confirmed only after actual XML validation;
+filtering/ranking reasons remain in release details. Search relevance remains
+`null`: processing scores are preset/rule scores, not identity confidence.
+Legacy title/generic searches retain their existing occurrence counts and
+unavailable provenance facts.
 
 ## Observe client requests
 

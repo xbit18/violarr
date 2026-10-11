@@ -30,6 +30,7 @@
 ## Funzionalità
 
 - Cerca film, serie TV e anime da Prowlarr.
+- Combina corrispondenze esatte IMDb/TMDB per film e TV, con evidenze di episodio nello stesso file per i pacchetti; i conflitti noti di identità sono esclusi, i metadati mancanti sono ammessi.
 - Configura tutto dalla WebUI in italiano o inglese.
 - Preferisci i risultati italiani o crea regole personalizzate.
 - Mantieni il database aggiornato automaticamente.
