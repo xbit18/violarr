@@ -35,6 +35,9 @@ const error = ref('')
 const replayNotice = ref(false)
 const preview = ref('')
 const historyPreview = ref('')
+const copyBusy = ref(false)
+const copyFeedback = ref<'success' | 'error' | ''>('')
+let copyGeneration = 0
 const monitoring = ref<MonitoringStatus | null>(null)
 const history = ref<MonitoredRequest[]>([])
 const inspected = ref<MonitoredRequest | null>(null)
@@ -173,7 +176,7 @@ async function refresh() {
 function selectTab(value: 'search' | 'requests') {
   if (tab.value === value) return
   stopPolling()
-  historyPreview.value = ''
+  closeHistoryPreview()
   tab.value = value
   if (value === 'requests') void refresh()
 }
@@ -200,7 +203,7 @@ async function changeMonitoring(value: boolean) {
 async function clearHistory() {
   if (actionBusy.value) return
   stopPolling()
-  historyPreview.value = ''
+  closeHistoryPreview()
   actionBusy.value = true
   historyError.value = ''
   const controller = new AbortController()
@@ -243,13 +246,34 @@ function prepareExport() {
     error.value = t('diagnostics.exportError')
   }
 }
+function closeHistoryPreview() {
+  copyGeneration++
+  copyFeedback.value = ''
+  historyPreview.value = ''
+}
+async function copyHistory() {
+  if (disposed || copyBusy.value || actionBusy.value || historyBusy.value || !historyPreview.value)
+    return
+  const current = copyGeneration
+  copyBusy.value = true
+  copyFeedback.value = ''
+  try {
+    // This write stays on the explicit confirmation gesture, after privacy review.
+    await navigator.clipboard.writeText(historyPreview.value)
+    if (!disposed && current === copyGeneration) copyFeedback.value = 'success'
+  } catch {
+    if (!disposed && current === copyGeneration) copyFeedback.value = 'error'
+  } finally {
+    copyBusy.value = false
+  }
+}
 async function prepareHistoryExport() {
   if (disposed || actionBusy.value || historyBusy.value || !history.value.length) return
   stopPolling()
   const current = generation
   actionBusy.value = true
   historyError.value = ''
-  historyPreview.value = ''
+  closeHistoryPreview()
   const controller = new AbortController()
   actionController = controller
   try {
@@ -286,6 +310,7 @@ function download(content = preview.value, historyExport = false) {
 }
 onBeforeUnmount(() => {
   disposed = true
+  closeHistoryPreview()
   stopPolling()
   searchController?.abort()
   actionController?.abort()
@@ -613,7 +638,7 @@ onBeforeUnmount(() => {
           ><button
             class="button"
             :disabled="historyBusy || actionBusy || !history.length"
-            @click="prepareHistoryExport"
+            @click="prepareHistoryExport()"
           >
             {{ t('diagnostics.exportHistory') }}
           </button>
@@ -633,15 +658,26 @@ onBeforeUnmount(() => {
         <div class="button-row">
           <button
             class="button"
+            :disabled="copyBusy || actionBusy || historyBusy"
+            @click="copyHistory"
+          >
+            {{ t('diagnostics.copyJson') }}
+          </button>
+          <button
+            class="button"
             :disabled="actionBusy || historyBusy"
             @click="download(historyPreview, true)"
           >
             {{ t('diagnostics.download') }}
           </button>
-          <button class="button button--secondary" @click="historyPreview = ''">
+          <button class="button button--secondary" @click="closeHistoryPreview">
             {{ t('diagnostics.close') }}
           </button>
         </div>
+        <p v-if="copyFeedback === 'success'" role="status">{{ t('diagnostics.copySuccess') }}</p>
+        <p v-if="copyFeedback === 'error'" class="inline-error" role="alert">
+          {{ t('diagnostics.copyError') }}
+        </p>
       </section>
       <p v-if="!history.length && !historyBusy && !historyError" class="empty-state">
         {{ t('diagnostics.noHistory') }}

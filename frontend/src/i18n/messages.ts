@@ -85,6 +85,9 @@ export const italianMessages = {
   'diagnostics.subtitle': 'Correzione sottotitoli applicata durante l’elaborazione',
   'diagnostics.preview': 'Anteprima report',
   'diagnostics.exportHistory': 'Esporta cronologia',
+  'diagnostics.copyJson': 'Copia JSON',
+  'diagnostics.copySuccess': 'Cronologia copiata negli appunti.',
+  'diagnostics.copyError': 'Impossibile copiare la cronologia. Usa Scarica JSON come alternativa.',
   'diagnostics.historyPreview': 'Anteprima cronologia',
   'diagnostics.privacy':
     'Termini di ricerca e titoli delle release possono essere sensibili. Esamina tutto il JSON e rimuovi i dati privati prima di condividerlo. Il download è locale e non invia il report a servizi esterni.',
@@ -441,6 +444,9 @@ export const englishMessages: Messages = {
   'diagnostics.subtitle': 'Subtitle correction applied for processing',
   'diagnostics.preview': 'Report preview',
   'diagnostics.exportHistory': 'Export history',
+  'diagnostics.copyJson': 'Copy JSON',
+  'diagnostics.copySuccess': 'History copied to clipboard.',
+  'diagnostics.copyError': 'Could not copy history. Use Download JSON instead.',
   'diagnostics.historyPreview': 'History preview',
   'diagnostics.privacy':
     'Search terms and release titles may be sensitive. Review the entire JSON and remove private data before sharing. The download is local and does not send the report to external services.',
