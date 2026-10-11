@@ -24,17 +24,281 @@ describe('database updates', () => {
     vi.restoreAllMocks()
   })
 
+  it.each([
+    ['en', 'Check for updates', 'Last check:'],
+    ['it', 'Controlla aggiornamenti', 'Ultimo controllo:'],
+  ] as const)(
+    'groups the compact manual action and localized last check in %s',
+    async (locale, action, label) => {
+      useLocale().setLocale(locale)
+      vi.mocked(api.status).mockResolvedValue({
+        ...statusFixture,
+        updater: { ...statusFixture.updater, phase: 'up_to_date' },
+      })
+      const { container } = render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+      await flushPromises()
+      const button = screen.getByRole('button', { name: action })
+      expect(button.classList.contains('manual-update-button')).toBe(true)
+      expect(button.closest('.manual-update-row')).toBeTruthy()
+      expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+      expect(button.querySelector('svg')?.getAttribute('focusable')).toBe('false')
+      const status = screen.getByRole('status')
+      expect(status.getAttribute('aria-live')).toBe('polite')
+      expect(status.closest('.manual-update-row')).toBe(button.closest('.manual-update-row'))
+      expect(status.textContent).toContain(useLocale().t('database.up_to_date'))
+      const timestamp = container.querySelector('time')!
+      expect(timestamp.getAttribute('datetime')).toBe(statusFixture.updater.last_check)
+      expect(timestamp.textContent).toBe(
+        new Intl.DateTimeFormat(locale, { dateStyle: 'short', timeStyle: 'short' }).format(
+          new Date(statusFixture.updater.last_check!),
+        ),
+      )
+      expect(timestamp.parentElement?.textContent).toContain(label)
+      expect(timestamp.closest('.manual-update-row')).toBe(button.closest('.manual-update-row'))
+      const divider = screen.getByRole('separator')
+      expect(divider.previousElementSibling).toBe(button.closest('.manual-update-row'))
+      expect(divider.nextElementSibling?.contains(screen.getByRole('switch'))).toBe(true)
+      expect(screen.getByRole('button', { name: useLocale().t('database.save') }).className).toBe(
+        'button',
+      )
+    },
+  )
+
+  it.each([
+    ['idle', null],
+    ['checking', 'progress'],
+    ['downloading', 'progress'],
+    ['validating', 'progress'],
+    ['restoring', 'progress'],
+    ['switching', 'progress'],
+    ['up_to_date', 'success'],
+    ['updated', 'success'],
+    ['failed', 'error'],
+  ] as const)('classifies %s without replacing the live status text', async (phase, tone) => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase },
+    })
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    expect(screen.getByRole('status').querySelector('.status-indicator')).toBeNull()
+    await flushPromises()
+    const status = screen.getByRole('status')
+    expect(status.getAttribute('aria-live')).toBe('polite')
+    expect(status.textContent?.trim()).toBe(
+      phase === 'idle' ? '' : useLocale().t(`database.${phase}`),
+    )
+    const indicator = status.querySelector('.status-indicator')
+    if (tone) {
+      expect(indicator?.classList.contains(`status-indicator--${tone}`)).toBe(true)
+      expect(indicator?.getAttribute('aria-hidden')).toBe('true')
+      expect(indicator?.textContent).toBe('')
+    } else expect(indicator).toBeNull()
+  })
+
+  it('does not mark an updating terminal phase as successful', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'updated', updating: true },
+    })
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    expect(screen.getByRole('status').querySelector('.status-indicator--progress')).toBeTruthy()
+    expect(screen.getByRole('status').querySelector('.status-indicator--success')).toBeNull()
+  })
+
+  it('keeps an unavailable phase neutral', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: undefined },
+    })
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    expect(screen.getByRole('status').querySelector('.status-indicator')).toBeNull()
+  })
+
+  it.each([
+    ['en', 'No checks performed yet'],
+    ['it', 'Nessun check ancora effettuato'],
+  ] as const)('shows the loaded no-history empty state in %s', async (locale, label) => {
+    useLocale().setLocale(locale)
+    vi.mocked(api.status).mockResolvedValueOnce({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'idle', last_check: null },
+    })
+    const { container } = render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    expect(screen.getByRole('status').textContent?.trim()).toBe('')
+    expect(screen.getByRole('status').querySelector('.status-indicator')).toBeNull()
+    await flushPromises()
+    const status = screen.getByRole('status')
+    expect(status.textContent?.trim()).toBe(label)
+    expect(status.getAttribute('aria-live')).toBe('polite')
+    expect(status.querySelector('.status-indicator--neutral')?.getAttribute('aria-hidden')).toBe(
+      'true',
+    )
+    expect(container.querySelector('time')).toBeNull()
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'up_to_date' },
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(status.textContent).toContain(useLocale().t('database.up_to_date'))
+    expect(status.querySelector('.status-indicator--neutral')).toBeNull()
+    expect(status.querySelector('.status-indicator--success')).toBeTruthy()
+    expect(container.querySelector('time')).toBeTruthy()
+  })
+
+  it.each([
+    [
+      'en',
+      'Check for updates manually or wait for the next automatic check.',
+      'Check manually to see whether updates are available.',
+    ],
+    [
+      'it',
+      'Avvia un check manualmente o attendi il prossimo check automatico.',
+      'Avvia un check manualmente per verificare la disponibilità di aggiornamenti.',
+    ],
+  ] as const)(
+    'reacts to the current automation toggle without requests in %s',
+    async (locale, automaticSubtitle, manualSubtitle) => {
+      useLocale().setLocale(locale)
+      vi.mocked(api.status).mockResolvedValue({
+        ...statusFixture,
+        updater: { ...statusFixture.updater, phase: 'idle', last_check: null },
+      })
+      const saveSettings = vi.fn()
+      const { container } = render(DatabaseUpdatesView, {
+        props: {
+          settings: {
+            ...settingsFixture,
+            database_update: { ...settingsFixture.database_update, enabled: false },
+          },
+          saveSettings,
+        },
+      })
+      await flushPromises()
+      expect(screen.getByText(manualSubtitle).className).toBe('last-check')
+      expect(screen.queryByText(automaticSubtitle)).toBeNull()
+      await fireEvent.click(screen.getByRole('switch'))
+      expect(screen.getByText(automaticSubtitle)).toBeTruthy()
+      expect(screen.queryByText(manualSubtitle)).toBeNull()
+      await fireEvent.click(screen.getByRole('switch'))
+      expect(screen.getByText(manualSubtitle)).toBeTruthy()
+      expect(screen.queryByText(automaticSubtitle)).toBeNull()
+      expect(api.status).toHaveBeenCalledTimes(1)
+      expect(api.triggerDatabaseUpdate).not.toHaveBeenCalled()
+      expect(saveSettings).not.toHaveBeenCalled()
+      expect(container.querySelector('time')).toBeNull()
+      vi.mocked(api.status).mockResolvedValue({
+        ...statusFixture,
+        updater: { ...statusFixture.updater, phase: 'up_to_date' },
+      })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(screen.queryByText(manualSubtitle)).toBeNull()
+      expect(screen.queryByText(automaticSubtitle)).toBeNull()
+    },
+  )
+
+  it.each([
+    ['checking', 'progress'],
+    ['downloading', 'progress'],
+    ['validating', 'progress'],
+    ['restoring', 'progress'],
+    ['switching', 'progress'],
+    ['up_to_date', 'success'],
+    ['updated', 'success'],
+    ['failed', 'error'],
+  ] as const)('preserves %s without a last-check timestamp', async (phase, tone) => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase, last_check: null },
+    })
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    const status = screen.getByRole('status')
+    expect(status.textContent?.trim()).toBe(useLocale().t(`database.${phase}`))
+    expect(status.querySelector(`.status-indicator--${tone}`)).toBeTruthy()
+    expect(screen.queryByText('No checks performed yet')).toBeNull()
+  })
+
+  it('does not mask a no-history backend error with the empty state', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: {
+        ...statusFixture.updater,
+        phase: 'idle',
+        last_check: null,
+        last_error: 'Snapshot update failed',
+      },
+    })
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    expect(screen.getByRole('status').querySelector('.status-indicator--error')).toBeTruthy()
+    expect(screen.queryByText('No checks performed yet')).toBeNull()
+  })
+
+  it('does not claim an empty history while the initial status is unknown', async () => {
+    vi.mocked(api.status).mockImplementation(() => new Promise(() => {}))
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(screen.getByRole('status').textContent?.trim()).toBe('')
+    expect(screen.getByRole('status').querySelector('.status-indicator')).toBeNull()
+    expect(screen.queryByText('No checks performed yet')).toBeNull()
+  })
+
+  it('shows progress while a manual request is pending over a previous success', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'up_to_date' },
+    })
+    vi.mocked(api.triggerDatabaseUpdate).mockImplementation(() => new Promise(() => {}))
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    await fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))
+    expect(screen.getByRole('status').textContent).toContain(useLocale().t('database.checking'))
+    expect(screen.getByRole('status').querySelector('.status-indicator--progress')).toBeTruthy()
+  })
+
+  it('does not mark a terminal phase with a backend error as successful', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'updated', last_error: 'Snapshot update failed' },
+    })
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    expect(screen.getByRole('status').querySelector('.status-indicator--error')).toBeTruthy()
+  })
+
+  it('omits an unavailable last check and displays the backend timestamp after polling', async () => {
+    vi.mocked(api.status).mockResolvedValueOnce({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, last_check: null },
+    })
+    const { container } = render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    expect(container.querySelector('time')).toBeNull()
+    expect(screen.queryByText('Last check:')).toBeNull()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
+      statusFixture.updater.last_check,
+    )
+  })
+
   it('validates and persists units and disabled automation', async () => {
     const saveSettings = vi.fn().mockResolvedValue(undefined)
     render(DatabaseUpdatesView, { props: { settings: settingsFixture, saveSettings } })
     expect((screen.getByLabelText('Check interval') as HTMLInputElement).value).toBe('1')
-    expect((screen.getByLabelText('Unit') as HTMLSelectElement).value).toBe('days')
+    const unit = screen.getByRole('combobox', { name: 'Unit' }) as HTMLSelectElement
+    expect(unit.tagName).toBe('SELECT')
+    expect(unit.classList.contains('input-select')).toBe(true)
+    expect(unit.value).toBe('days')
     await fireEvent.update(screen.getByLabelText('Check interval'), '0')
     await fireEvent.click(screen.getByRole('button', { name: 'Save update settings' }))
     expect(screen.getByRole('alert')).toBeTruthy()
     expect(saveSettings).not.toHaveBeenCalled()
     await fireEvent.update(screen.getByLabelText('Check interval'), '1')
-    await fireEvent.update(screen.getByLabelText('Unit'), 'hours')
+    await fireEvent.update(unit, 'hours')
     await fireEvent.click(screen.getByRole('switch'))
     await fireEvent.update(screen.getByLabelText('Check interval'), '12')
     await fireEvent.click(screen.getByRole('button', { name: 'Save update settings' }))
@@ -219,7 +483,7 @@ describe('database updates', () => {
     await flushPromises()
     expect(screen.getByText('Checking the available snapshot…')).toBeTruthy()
     expect(
-      (screen.getByRole('button', { name: 'Check and update now' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'Check for updates' }) as HTMLButtonElement).disabled,
     ).toBe(true)
     await fireEvent.update(screen.getByLabelText('Check interval'), '2')
     await vi.advanceTimersByTimeAsync(2000)
@@ -230,18 +494,24 @@ describe('database updates', () => {
   })
 
   it('accepts one manual request with automation off, then shows completion', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'idle', last_check: null },
+    })
     const settings = {
       ...settingsFixture,
       database_update: { enabled: false, interval_seconds: 86400 },
     }
     render(DatabaseUpdatesView, { props: { settings } })
     await flushPromises()
-    const button = screen.getByRole('button', { name: 'Check and update now' })
+    const button = screen.getByRole('button', { name: 'Check for updates' })
     await fireEvent.click(button)
     await flushPromises()
     await fireEvent.click(button)
     expect(api.triggerDatabaseUpdate).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Request accepted. Checking for updates.')).toBeTruthy()
+    expect(screen.queryByText('No checks performed yet')).toBeNull()
+    expect(screen.getByRole('status').querySelector('.status-indicator--progress')).toBeTruthy()
     vi.mocked(api.status).mockResolvedValue({
       ...statusFixture,
       updater: { ...statusFixture.updater, phase: 'updated' },
@@ -261,21 +531,49 @@ describe('database updates', () => {
     render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
     await flushPromises()
     expect(screen.getByRole('alert').textContent).toBe('offline')
+    expect(screen.getByRole('status').querySelector('.status-indicator--error')).toBeTruthy()
     await vi.advanceTimersByTimeAsync(2000)
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByText('Database updated.')).toBeTruthy()
+    expect(screen.getByRole('status').querySelector('.status-indicator--success')).toBeTruthy()
+  })
+
+  it('keeps polling failures visible after a loaded empty state', async () => {
+    vi.mocked(api.status)
+      .mockResolvedValueOnce({
+        ...statusFixture,
+        updater: { ...statusFixture.updater, phase: 'idle', last_check: null },
+      })
+      .mockRejectedValueOnce(new ApiError('offline'))
+    render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
+    await flushPromises()
+    expect(screen.getByText('No checks performed yet')).toBeTruthy()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(screen.getByRole('alert').textContent).toBe('offline')
+    expect(screen.getByRole('status').querySelector('.status-indicator--error')).toBeTruthy()
+    expect(screen.queryByText('No checks performed yet')).toBeNull()
   })
 
   it.each([409, 500])('shows manual request errors %s', async (status) => {
     vi.mocked(api.triggerDatabaseUpdate).mockRejectedValue(new ApiError('request failed', status))
+    vi.mocked(api.status).mockResolvedValue({
+      ...statusFixture,
+      updater: { ...statusFixture.updater, phase: 'idle', last_check: null },
+    })
     render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
     await flushPromises()
-    await fireEvent.click(screen.getByRole('button', { name: 'Check and update now' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))
     await flushPromises()
     expect(
       screen.getByText(
         status === 409 ? 'A check or update is already in progress.' : 'request failed',
       ),
+    ).toBeTruthy()
+    expect(screen.queryByText('No checks performed yet')).toBeNull()
+    expect(
+      screen
+        .getByRole('status')
+        .querySelector(`.status-indicator--${status === 409 ? 'progress' : 'error'}`),
     ).toBeTruthy()
   })
 
@@ -309,7 +607,7 @@ describe('database updates', () => {
     render(DatabaseUpdatesView, { props: { settings: settingsFixture } })
     await flushPromises()
     expect(screen.getByText('Aggiornamento del database non riuscito.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Controlla e aggiorna ora' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Controlla aggiornamenti' })).toBeTruthy()
   })
 })
 

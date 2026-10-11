@@ -11,7 +11,8 @@ const props = defineProps<{
   saveSettings?: (settings: PublicSettings) => Promise<unknown>
 }>()
 const store = useAppStore()
-const { t } = useLocale()
+const locale = useLocale()
+const { t } = locale
 const enabled = ref(true)
 const interval = ref(86400)
 const unit = ref<IntervalUnit>('days')
@@ -60,6 +61,17 @@ const active = computed(() => pending.value || !!progress.value?.updating)
 const phase = computed(
   () => progress.value?.phase ?? (progress.value?.updating ? 'checking' : 'idle'),
 )
+const statusTone = computed(() => {
+  if (pollingError.value) return 'error'
+  if (active.value) return 'progress'
+  if (feedback.value) return feedback.value === t('database.busy') ? 'progress' : 'error'
+  if (phase.value === 'failed' || progress.value?.last_error) return 'error'
+  if (['checking', 'downloading', 'validating', 'restoring', 'switching'].includes(phase.value))
+    return 'progress'
+  if (phase.value === 'up_to_date' || phase.value === 'updated') return 'success'
+  if (progress.value && phase.value === 'idle' && !progress.value.last_check) return 'neutral'
+  return null
+})
 let mounted = true
 let timer: ReturnType<typeof setTimeout> | undefined
 let controller: AbortController | undefined
@@ -175,20 +187,61 @@ async function save() {
       </div>
     </div>
     <article class="card form-card">
-      <button class="button" type="button" :disabled="active" @click="checkNow">
-        {{ t('database.checkNow') }}
-      </button>
-      <p role="status" aria-live="polite">
-        {{
-          pending
-            ? feedback || t('database.checking')
-            : phase !== 'idle'
-              ? t(`database.${phase}`)
-              : feedback
-        }}
-      </p>
-      <p v-if="feedback && !pending && phase !== 'idle'" role="status">{{ feedback }}</p>
-      <p v-if="pollingError" class="inline-error" role="alert">{{ pollingError }}</p>
+      <div class="manual-update-row">
+        <button
+          class="button manual-update-button"
+          type="button"
+          :disabled="active"
+          @click="checkNow"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M20 7v5h-5M4 17v-5h5" />
+            <path d="M6 7a7 7 0 0 1 11.5-1L20 12M4 12l2.5 6A7 7 0 0 0 18 17" />
+          </svg>
+          {{ t('database.checkNow') }}
+        </button>
+        <div class="manual-update-status">
+          <p class="status-message" role="status" aria-live="polite">
+            <span
+              v-if="statusTone"
+              class="status-indicator"
+              :class="`status-indicator--${statusTone}`"
+              aria-hidden="true"
+            ></span>
+            {{
+              pending
+                ? feedback || t('database.checking')
+                : phase !== 'idle'
+                  ? t(`database.${phase}`)
+                  : feedback || (statusTone === 'neutral' ? t('database.noChecks') : '')
+            }}
+          </p>
+          <p v-if="statusTone === 'neutral'" class="last-check">
+            {{ t(enabled ? 'database.noChecksAutomatic' : 'database.noChecksManual') }}
+          </p>
+          <p v-if="progress?.last_check" class="last-check">
+            {{ t('database.lastCheck') }}
+            <time :datetime="progress.last_check">{{
+              new Intl.DateTimeFormat(locale.current.value, {
+                dateStyle: 'short',
+                timeStyle: 'short',
+              }).format(new Date(progress.last_check))
+            }}</time>
+          </p>
+          <p v-if="feedback && !pending && phase !== 'idle'" role="status">{{ feedback }}</p>
+          <p v-if="pollingError" class="inline-error" role="alert">{{ pollingError }}</p>
+        </div>
+      </div>
+      <hr class="manual-update-divider" />
       <ToggleSwitch
         v-model="enabled"
         @update:model-value="editEnabled"
@@ -206,7 +259,7 @@ async function save() {
             inputmode="decimal" /></label
         ><label
           >{{ t('database.unit')
-          }}<select :value="unit" @change="changeUnit">
+          }}<select class="input-select" :value="unit" @change="changeUnit">
             <option v-for="name in intervalUnits" :key="name" :value="name">
               {{ t(`database.${name}`) }}
             </option>
@@ -227,6 +280,69 @@ async function save() {
   </section>
 </template>
 <style scoped>
+.manual-update-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+.manual-update-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+}
+.manual-update-button svg {
+  flex-shrink: 0;
+}
+.manual-update-status {
+  flex: 1 1 14rem;
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.manual-update-status p {
+  margin: 0;
+}
+.manual-update-status p + p {
+  margin-top: 4px;
+}
+.status-message {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-indicator {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.status-indicator--success {
+  background: var(--success);
+}
+.status-indicator--progress {
+  background: var(--warning);
+}
+.status-indicator--error {
+  background: var(--danger);
+}
+.status-indicator--neutral {
+  background: var(--muted);
+}
+.last-check {
+  color: var(--muted);
+  font-size: 12px;
+}
+.manual-update-divider {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
 .interval-controls {
   display: flex;
   flex-wrap: wrap;
@@ -235,5 +351,16 @@ async function save() {
 .interval-controls label {
   flex: 1 1 10rem;
   min-width: 0;
+}
+@media (max-width: 600px) {
+  .manual-update-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .manual-update-status {
+    flex: auto;
+    width: 100%;
+    text-align: left;
+  }
 }
 </style>
