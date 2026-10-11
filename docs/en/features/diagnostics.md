@@ -45,11 +45,12 @@ retain only observed information; an HTTP error may produce no report at all.
 
 ### Strategy executions and provenance
 
-Report v2 lists each applicable exact-ID strategy per inspected window. One
-shared SQL execution merges the branches; its duration belongs to the database
-stage. Independent branch durations are **Not available** (`null`), not zero or
-invented timings. A failed shared query leaves branch counts unavailable.
-Failures in observation do not change normal search results.
+Report v2 lists each applicable movie/TV ID, title, fuzzy or pack strategy per
+inspected window. One shared SQL execution merges the branches; its duration
+belongs to the database stage. Independent branch durations are **Not
+available** (`null`), not zero or invented timings. A failed shared query leaves
+branch counts unavailable. Failures in observation do not change normal search
+results.
 
 **Result provenance** groups observations by an opaque SHA256 identity derived
 from the stored info-hash. It is stable across ordering/windows, but distinct
@@ -58,16 +59,27 @@ Exact-ID candidate counts describe the fetched, hash-deduplicated window, not
 all database matches. Each strategy count is the observed membership of that
 window; overlaps appear in multiple strategies. Unique contribution counts
 candidates belonging only to that strategy in the inspected window. Safe match
-evidence identifies exact IMDb/TMDB and torrent/file sources, not downstream
-acceptance.
+evidence identifies exact IMDb/TMDB or title matches and torrent/file/pack_file
+sources, not downstream acceptance.
 
 For exact-ID searches, deduplicated indicates that SQL collapsed multiple branch
 matches for this hash; file `EXISTS` prevents fan-out without counting raw
 files. Inclusion is confirmed only after actual XML validation;
 filtering/ranking reasons remain in release details. Search relevance remains
 `null`: processing scores are preset/rule scores, not identity confidence.
-Legacy title/generic searches retain their existing occurrence counts and
-unavailable provenance facts.
+Generic searches retain their existing occurrence counts and unavailable
+provenance facts.
+
+Movie/TV candidates use four tiers: parent torrent IDs, exact file/pack-child
+evidence, validated text, then fuzzy. File-qualified TMDB stays in the second
+tier, while its identity source remains `torrent`. The strongest observed
+membership wins; within each tier, seeders descend (NULL last), then hash
+ascends. Similarity does not order within a tier. Preset/rule ranking remains
+window-local. Pack evidence identifies a child match but the release metadata
+stays parent-owned; child identifiers and paths are not exported. Fuzzy pools
+over 2000 rows are omitted, and short/generic terms may not use fuzzy recovery.
+A zero fuzzy count is not proof of no approximate match. See
+[coverage limits](../reference/torznab-capabilities).
 
 ## Observe client requests
 

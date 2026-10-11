@@ -186,14 +186,14 @@ def test_database_error_is_sanitized_and_partial(store, monkeypatch):
     [
         ({"t": "search", "q": ""}, "generic_browse", (1, 0)),
         ({"t": "search", "q": " %_ "}, "generic_title", ("% %_ %", 1, 0)),
-        ({"t": "movie", "imdbid": "  "}, "movie_imdb", ("tt", 1, 0)),
+        ({"t": "movie", "imdbid": "  "}, "multi_strategy", ("tt", "tt", 1, 0)),
         (
             {"t": "movie", "imdbid": "TT12", "tmdbid": 0},
             "multi_strategy",
-            ("ttTT12", 0, 0, "ttTT12", 1, 0),
+            ("ttTT12", 0, 0, "ttTT12", "ttTT12", 1, 0),
         ),
-        ({"t": "movie", "tmdbid": 0, "q": "title"}, "movie_tmdb", (0, 1, 0)),
-        ({"t": "movie", "q": "title"}, "movie_title", ("%title%", 1, 0)),
+        ({"t": "movie", "tmdbid": 0, "q": "title"}, "multi_strategy", "coverage"),
+        ({"t": "movie", "q": "title"}, "multi_strategy", "coverage"),
         ({"t": "movie"}, "movie_empty", None),
         (
             {"t": "tvsearch", "imdbid": "12", "season": 0, "ep": 0},
@@ -207,15 +207,15 @@ def test_database_error_is_sanitized_and_partial(store, monkeypatch):
         ),
         (
             {"t": "tvsearch", "q": "", "season": 1, "ep": 9},
-            "tv_title_season",
-            ("%%", 1, "%S01%", "%Season 1%", 1, 0),
+            "tv_empty",
+            None,
         ),
         (
             {"t": "tvsearch", "imdbid": "12", "tmdbid": 77},
             "multi_strategy",
             ("tt12", 77, 77, "tt12", "tt12", 1, 0),
         ),
-        ({"t": "tvsearch", "q": "title"}, "tv_title", ("%title%", 1, 0)),
+        ({"t": "tvsearch", "q": "title"}, "multi_strategy", "coverage"),
         ({"t": "tvsearch"}, "tv_empty", None),
     ],
 )
@@ -249,8 +249,14 @@ def test_real_query_branch_strategy_and_binding(store, monkeypatch, params, stra
     observed = collector()
     run_search({"limit": 1, "offset": 0, **params}, observed)
     assert observed.report["strategy"] == strategy
-    assert conn.values == sql_values
-    assert conn.connections == 1
+    if sql_values == "coverage":
+        assert conn.values[-2:] == (1, 0)
+        assert "%title%" in conn.values
+        if "tmdbid" in params:
+            assert params["tmdbid"] in conn.values
+    else:
+        assert conn.values == sql_values
+    assert conn.connections == (0 if sql_values is None else 1)
 
 
 def test_custom_first_exclusion_stable_scores_subtitle(store, monkeypatch):

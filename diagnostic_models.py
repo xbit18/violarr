@@ -143,8 +143,8 @@ class RequestHistory(BaseModel):
 
 class MatchMetadata(BaseModel):
     field: Literal["title", "imdb", "tmdb", "season", "episode"] | None = None
-    match_type: Literal["exact", "contains", "token", "browse"] | None = None
-    source: Literal["torrent", "file"] | None = None
+    match_type: Literal["exact", "contains", "token", "browse", "fuzzy"] | None = None
+    source: Literal["torrent", "file", "pack_file"] | None = None
 
 
 class StrategyExecution(BaseModel):

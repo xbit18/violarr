@@ -5,6 +5,7 @@ Only parameter markers and ILIKE are adapted; PostgreSQL plans/types still need
 separate integration proof against an explicitly authorized local database.
 """
 
+import re
 import sqlite3
 from xml.etree import ElementTree
 
@@ -30,7 +31,23 @@ class LocalSQL:
                 imdb_season INTEGER, imdb_episode INTEGER,
                 UNIQUE(info_hash, file_index)
             );
+            CREATE TABLE pack_files (
+                id INTEGER PRIMARY KEY, pack_hash TEXT, imdb_id TEXT,
+                file_index INTEGER, file_path TEXT, file_size INTEGER,
+                created_at TEXT, rd_link_index INTEGER);
         """)
+        self.db.create_function(
+            "regexp_like",
+            3,
+            lambda text, pattern, flags: bool(re.search(pattern, text or "", re.I)),
+        )
+        self.db.create_function(
+            "regexp_replace",
+            4,
+            lambda text, pattern, replacement, flags: re.sub(
+                pattern, replacement, text or "", flags=re.I
+            ),
+        )
 
     def __enter__(self):
         return self
@@ -119,7 +136,8 @@ def test_all_parent_ids_missing_conflicting_and_shared(sql, kind, t, ids, expect
     sql.torrent("wrong_imdb", imdb="tt999", tmdb=10, kind=kind)
     sql.torrent("wrong_tmdb", imdb="tt123", tmdb=99, kind=kind)
     sql.torrent("title_only", kind=kind, title="fallback")
-    assert hashes(backend.execute_search(t=t, q="fallback", **ids)) == expected
+    # Exact-only compatibility; ID+title coverage has its own contract tests.
+    assert hashes(backend.execute_search(t=t, **ids)) == expected
     assert len(sql.calls) == 1
     assert "UNION ALL" in sql.calls[0][0] if len(ids) == 2 else True
 
@@ -154,9 +172,9 @@ def test_tv_parent_season_episode_constraints(sql, ids):
     ]
 
 
-def test_legacy_title_season_ignores_episode_and_unknown_type(sql):
+def test_title_season_now_qualifies_episode_and_unknown_type(sql):
     sql.torrent("legacy", kind="series", title="Show S01E09", episode=9)
-    assert hashes(backend.execute_search(t="tvsearch", q="Show", season=1, ep=1)) == ["legacy"]
+    assert hashes(backend.execute_search(t="tvsearch", q="Show", season=1, ep=1)) == []
     assert hashes(backend.execute_search(t="music", imdbid="123", tmdbid=10)) == []
 
 
@@ -266,7 +284,7 @@ def test_diagnostics_observed_memberships_counts_and_serialized_facts(sql):
     assert [
         (s["identifier"], s["candidates"], s["unique_contribution"], s["duration_ms"])
         for s in report["strategies"]
-    ] == [("movie_imdb", 2, 1, None), ("movie_tmdb", 2, 1, None)]
+    ] == [("movie_imdb", 2, 1, None), ("movie_tmdb", 2, 1, None), ("movie_pack_imdb", 0, 0, None)]
     assert [p["strategies"] for p in report["provenance"]] == [
         ["movie_imdb", "movie_tmdb"],
         ["movie_imdb"],
@@ -451,7 +469,11 @@ def test_shared_sql_failure_keeps_attempts_without_inventing_branch_metrics(sql,
     assert [
         (s["identifier"], s["status"], s["candidates"], s["duration_ms"])
         for s in observed.report["strategies"]
-    ] == [("movie_imdb", "failed", None, None), ("movie_tmdb", "failed", None, None)]
+    ] == [
+        ("movie_imdb", "failed", None, None),
+        ("movie_tmdb", "failed", None, None),
+        ("movie_pack_imdb", "failed", None, None),
+    ]
     assert observed.report["provenance"] == []
 
 
@@ -479,7 +501,7 @@ def test_exact_sql_no_cross_window_backfill_and_empty_observed_strategies(sql):
     assert (
         hashes(backend.execute_search(t="movie", imdbid="other", tmdbid=99, collector=empty)) == []
     )
-    assert [s["candidates"] for s in empty.report["strategies"]] == [0, 0]
+    assert [s["candidates"] for s in empty.report["strategies"]] == [0, 0, 0]
 
 
 @pytest.mark.parametrize("event", ["merged_begin", "merged_window"])

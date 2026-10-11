@@ -34,8 +34,21 @@ services:
       PGID: 1000
       TZ: Europe/Rome
     volumes:
-        - sonarr-test-config:/config
-        - sonarr-test-media:/tv
+      - sonarr-test-config:/config
+      - sonarr-test-media:/tv
+    restart: "no"
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    ports:
+      - "127.0.0.1:17878:7878"
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Europe/Rome
+    volumes:
+      - radarr-test-config:/config
+      - radarr-test-media:/movies
     restart: "no"
 
 volumes:
@@ -43,3 +56,5 @@ volumes:
   prowlarr-test-config:
   sonarr-test-config:
   sonarr-test-media:
+  radarr-test-config:
+  radarr-test-media:

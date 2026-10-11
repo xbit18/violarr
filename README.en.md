@@ -31,6 +31,7 @@
 
 - Search movies, TV, and anime from Prowlarr.
 - Combine exact IMDb/TMDB matches for movies and TV, with same-file TV episode evidence for packs; known identity conflicts are excluded, missing metadata is allowed.
+- Recover punctuation-separated titles, conservative typos, and movie-pack children alongside exact IDs; returned metadata always belongs to the torrent. See [search coverage and limits](https://xbit18.github.io/violarr/en/reference/torznab-capabilities).
 - Configure everything from the WebUI in Italian or English.
 - Prefer Italian results or build custom rules.
 - Keep the database updated automatically.
