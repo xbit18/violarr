@@ -73,6 +73,8 @@ class SnapshotUpdater:
         self._state_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._task: asyncio.Task | None = None
+        self._manual_task: asyncio.Task | None = None
+        self._stopping = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake_event: asyncio.Event | None = None
         self._latest_version: str | None = None
@@ -80,6 +82,7 @@ class SnapshotUpdater:
         self._last_check: datetime | None = None
         self._next_check: datetime | None = None
         self._last_error: str | None = None
+        self._phase = "idle"
 
     def _log(self, message: str) -> None:
         print(f"[snapshot-updater] {message}", flush=True)
@@ -93,8 +96,8 @@ class SnapshotUpdater:
             self._next_check = value
 
     def _refresh_configuration(self) -> None:
-        settings = self.settings_store.load()["database_update"]
         with self._state_lock:
+            settings = self.settings_store.load()["database_update"]
             self.enabled = settings["enabled"]
             self.interval = settings["interval_seconds"]
             if not self.enabled:
@@ -113,11 +116,17 @@ class SnapshotUpdater:
                 return
 
     def reconfigure(self) -> None:
-        self._refresh_configuration()
-        with self._lifecycle_lock:
-            task_active = self._task is not None
-        if self.enabled and task_active:
-            self._set_next_check(self._now())
+        with self._state_lock:
+            settings = self.settings_store.load()["database_update"]
+            was_enabled, interval = self.enabled, self.interval
+            self.enabled = settings["enabled"]
+            self.interval = settings["interval_seconds"]
+            if not self.enabled or self._updating:
+                self._next_check = None
+            elif not was_enabled:
+                self._next_check = self._now()
+            elif interval != self.interval:
+                self._next_check = self._now() + timedelta(seconds=self.interval)
         self._signal_wake()
 
     def status(self) -> dict:
@@ -131,6 +140,7 @@ class SnapshotUpdater:
                 "latest_version": self._latest_version,
                 "enabled": self.enabled,
                 "updating": self._updating,
+                "phase": self._phase,
                 "maintenance": self.maintenance.is_set(),
                 "last_check": self._iso(self._last_check),
                 "next_check": self._iso(self._next_check) if self.enabled else None,
@@ -264,6 +274,7 @@ class SnapshotUpdater:
 
             self._log("SHA256 verificato.")
 
+            self._set_phase("validating")
             subprocess.run(
                 ["pg_restore", "--list", str(path)],
                 check=True,
@@ -423,14 +434,16 @@ class SnapshotUpdater:
                         previous,
                     )
 
-                self._rename_database(
-                    connection,
-                    candidate,
-                    self.db_name,
-                )
+                try:
+                    self._rename_database(connection, candidate, self.db_name)
+                except Exception:
+                    if self._database_exists(connection, previous):
+                        self._rename_database(connection, previous, self.db_name)
+                    raise
 
             try:
                 self._validate_database(self.db_name)
+                self.write_local_version(snapshot_version)
 
             except Exception:
                 self._log("Validazione del nuovo database fallita. Avvio rollback...")
@@ -450,8 +463,6 @@ class SnapshotUpdater:
 
                 raise
 
-            self.write_local_version(snapshot_version)
-
             with self._admin_connection() as connection:
                 self._drop_database(connection, previous)
 
@@ -464,19 +475,56 @@ class SnapshotUpdater:
     # Ciclo di aggiornamento
     # ------------------------------------------------------------------
 
-    def update_once(self) -> None:
+    def _set_phase(self, phase: str) -> None:
+        with self._state_lock:
+            self._phase = phase
+
+    def _reserve(self, *, scheduled: bool = False) -> bool:
+        with self._state_lock:
+            # Reconfiguration and scheduled admission share one atomic boundary.
+            if scheduled and (
+                not self.enabled or self._next_check is None or self._next_check > self._now()
+            ):
+                return False
+            # Never wait for the update lock while holding state ownership.
+            if not self._update_lock.acquire(blocking=False):
+                return False
+            self._updating = True
+            self._phase = "checking"
+            self._last_error = None
+            self._next_check = None
+        return True
+
+    async def trigger_manual(self) -> bool:
+        # Admission happens before acknowledgment, on the application event loop.
+        if self._stopping or not self._reserve():
+            return False
+        self._manual_task = asyncio.create_task(self._run_worker(self._update_reserved))
+        return True
+
+    async def _run_worker(self, operation) -> None:
+        worker = asyncio.create_task(asyncio.to_thread(operation))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Cancelling to_thread does not stop PostgreSQL work. Own it until it finishes.
+            await worker
+            raise
+
+    def update_once(self, *, scheduled: bool = False) -> None:
         self._refresh_configuration()
         if not self.enabled:
             return
 
-        if not self._update_lock.acquire(blocking=False):
+        if not self._reserve(scheduled=scheduled):
             self._log("Un aggiornamento è già in corso.")
             return
 
+        self._update_reserved()
+
+    def _update_reserved(self) -> None:
         dump_path: Path | None = None
         candidate = f"{self.db_name}_candidate"
-        with self._state_lock:
-            self._updating = True
 
         try:
             latest = self.get_latest_snapshot()
@@ -490,25 +538,32 @@ class SnapshotUpdater:
 
             if not self._needs_update(local, latest.version):
                 self._log("Database già aggiornato.")
+                self._set_phase("up_to_date")
                 return
 
             self._log(f"Nuovo snapshot disponibile: {latest.version}")
 
+            self._set_phase("downloading")
             dump_path = self.download_snapshot(latest)
 
+            self._set_phase("restoring")
             self._create_candidate_database(candidate)
             self._restore_dump(dump_path, candidate)
+            self._set_phase("validating")
             self._validate_database(candidate)
 
+            self._set_phase("switching")
             self._switch_database(
                 candidate,
                 latest.version,
             )
+            self._set_phase("updated")
 
         except Exception as exc:
             self._log(f"Snapshot update failed ({type(exc).__name__}).")
             with self._state_lock:
                 self._last_error = "Snapshot update failed"
+                self._phase = "failed"
 
             # Se il candidate esiste ancora, viene rimosso.
             try:
@@ -523,35 +578,46 @@ class SnapshotUpdater:
                 )
 
         finally:
-            if dump_path is not None:
-                dump_path.unlink(missing_ok=True)
-
-            with self._state_lock:
-                self._updating = False
-                self._last_check = self._now()
-            self._update_lock.release()
+            try:
+                if dump_path is not None:
+                    dump_path.unlink(missing_ok=True)
+            except OSError:
+                self._log("Unable to remove the downloaded snapshot.")
+            finally:
+                try:
+                    with self._state_lock:
+                        try:
+                            settings = self.settings_store.load()["database_update"]
+                            self.enabled = settings["enabled"]
+                            self.interval = settings["interval_seconds"]
+                            self._last_check = self._now()
+                            self._next_check = (
+                                self._last_check + timedelta(seconds=self.interval)
+                                if self.enabled
+                                else None
+                            )
+                        finally:
+                            # Publish idle and its deadline atomically with reconfiguration.
+                            self._updating = False
+                finally:
+                    self._update_lock.release()
+                    self._signal_wake()
 
     async def _update_loop(self, wake_event: asyncio.Event) -> None:
-        if self.start_delay > 0:
-            try:
-                await asyncio.wait_for(wake_event.wait(), timeout=self.start_delay)
-                wake_event.clear()
-            except asyncio.TimeoutError:
-                pass
-
         while True:
-            self._refresh_configuration()
-            if not self.enabled:
-                self._set_next_check(None)
-                await wake_event.wait()
-                wake_event.clear()
+            wake_event.clear()
+            with self._state_lock:
+                deadline = self._next_check if self.enabled and not self._updating else None
+            delay = max(0, (deadline - self._now()).total_seconds()) if deadline else None
+            if delay == 0:
+                await self._run_worker(lambda: self.update_once(scheduled=True))
+                # Avoid spinning if an attempt returns without changing the deadline.
+                with self._state_lock:
+                    if self._next_check == deadline:
+                        self._next_check = self._now() + timedelta(seconds=self.interval)
                 continue
-
-            await asyncio.to_thread(self.update_once)
-            self._set_next_check(self._now() + timedelta(seconds=self.interval))
             try:
-                await asyncio.wait_for(wake_event.wait(), timeout=self.interval)
-                wake_event.clear()
+                await asyncio.wait_for(wake_event.wait(), timeout=delay)
             except asyncio.TimeoutError:
                 pass
 
@@ -559,6 +625,7 @@ class SnapshotUpdater:
         with self._lifecycle_lock:
             if self._task is not None:
                 return
+            self._stopping = False
             self._loop = asyncio.get_running_loop()
             self._wake_event = asyncio.Event()
             wake_event = self._wake_event
@@ -571,17 +638,18 @@ class SnapshotUpdater:
             self._log("Automatic updates disabled.")
 
     async def stop(self) -> None:
+        self._stopping = True
         with self._lifecycle_lock:
             task = self._task
-            if task is None:
-                return
-
-        task.cancel()
-
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if self._manual_task is not None:
+            await self._manual_task
+            self._manual_task = None
 
         with self._lifecycle_lock:
             if self._task is task:

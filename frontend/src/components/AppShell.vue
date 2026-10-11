@@ -104,6 +104,7 @@ const links = [
       <label class="language-select"
         ><span class="sr-only">{{ locale.t('language.label') }}</span
         ><select
+          class="input-select"
           :aria-label="locale.t('language.label')"
           :value="locale.current.value"
           @change="locale.setLocale(($event.target as HTMLSelectElement).value as Locale)"
@@ -115,6 +116,7 @@ const links = [
       <label class="theme-select"
         ><span class="sr-only">{{ locale.t('theme.label') }}</span
         ><select
+          class="input-select"
           :aria-label="locale.t('theme.label')"
           :value="theme.preference.value"
           @change="

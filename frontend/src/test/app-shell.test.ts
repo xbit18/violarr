@@ -53,7 +53,7 @@ describe('mobile application shell', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('main')))
   })
 
-  it('starts in Italian and persists an accessible English selection', async () => {
+  it('styles native language and theme selects and persists accessible selections', async () => {
     vi.stubGlobal(
       'matchMedia',
       vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -70,7 +70,22 @@ describe('mobile application shell', () => {
     expect(logo?.getAttribute('src')).toBe('/logo.png')
     expect(logo?.getAttribute('alt')).toBe('')
     expect(screen.getByRole('link', { name: 'Panoramica' })).toBeTruthy()
-    await fireEvent.update(screen.getByRole('combobox', { name: 'Lingua' }), 'en')
+    const language = screen.getByRole('combobox', { name: 'Lingua' }) as HTMLSelectElement
+    const theme = screen.getByRole('combobox', { name: 'Tema colore' }) as HTMLSelectElement
+    for (const select of [language, theme]) {
+      expect(select.tagName).toBe('SELECT')
+      expect(select.classList.contains('input-select')).toBe(true)
+    }
+    expect(theme.value).toBe('system')
+    await fireEvent.update(theme, 'dark')
+    expect(theme.value).toBe('dark')
+    expect(localStorage.getItem('icvdb-theme')).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    await fireEvent.update(theme, 'light')
+    expect(document.documentElement.dataset.theme).toBe('light')
+    await fireEvent.update(theme, 'system')
+    expect(localStorage.getItem('icvdb-theme')).toBeNull()
+    await fireEvent.update(language, 'en')
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBeTruthy()
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en')
     expect(document.documentElement.lang).toBe('en')

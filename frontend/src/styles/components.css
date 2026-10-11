@@ -159,8 +159,14 @@
 }
 .form-card input,
 .rule input,
-.rule select {
+.rule select,
+.form-card .input-select {
   width: 100%;
+}
+.form-card input,
+.rule input,
+.rule select,
+.input-select {
   min-height: 39px;
   border: 1px solid var(--border);
   border-radius: 7px;

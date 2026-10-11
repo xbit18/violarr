@@ -263,6 +263,28 @@ and filtered pages are not backfilled from later windows.
 This pipeline affects only ICVDB's XML response. It cannot guarantee downstream
 Radarr/Sonarr selection. Hard filters hide results from Prowlarr entirely.
 
+## Database update controls
+
+`POST /webapi/database-update` reserves the existing updater lock before returning
+`202`; duplicates return safe `409 update_busy` details. Manual work bypasses only
+the automatic-enabled setting and shares discovery, digest/dump validation,
+candidate restore/validation, switch and rollback. `GET /webapi/status` adds safe
+`updater.phase` progress and terminal outcomes. Maintenance still returns `503`
+for every route; sequential WebUI status polling tolerates it without reloading settings.
+
+Idle interval changes recalculate the deadline from reconfiguration time; enabling
+allows a prompt check and disabling clears it. Active configuration changes neither
+cancel nor queue work. All completions use latest effective settings to schedule
+completion plus interval, or no deadline when disabled. Startup delay is retained.
+Shutdown waits for owned worker threads; cancelling `to_thread` alone cannot stop
+database work. Cleanup cannot strand the updater lock. Candidate-rename and version
+record failures restore the previous database within maintenance.
+
+The UI stores unchanged schema-v1 integer seconds (`60..604800` inclusive), displays
+minutes/hours/days, and validates decimal conversion without rounding. Untouched
+legacy values preserve exact seconds across unit switches. Environment overrides
+remain authoritative; `/data` and all compatibility/security boundaries are unchanged.
+
 ## Search diagnostics and request monitoring
 
 `/diagnostics` in the Vue WebUI defaults to Search. Its simple/advanced form sends

@@ -1,11 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, REQUEST_TIMEOUT_MS, requestJson } from '../api/client'
+import { api, ApiError, REQUEST_TIMEOUT_MS, requestJson } from '../api/client'
 import { useLocale } from '../i18n'
 
 afterEach(() => vi.useRealTimers())
 beforeEach(() => useLocale().setLocale('en'))
 
 describe('API client', () => {
+  it('posts the manual trigger and forwards status cancellation', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: true }), { status: 202 })),
+    )
+    expect(await api.triggerDatabaseUpdate()).toEqual({ accepted: true })
+    expect(fetch).toHaveBeenCalledWith(
+      '/webapi/database-update',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const caller = new AbortController()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({})))
+    await api.status(caller.signal)
+    expect(fetch).toHaveBeenLastCalledWith(
+      '/webapi/status',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
   it('normalizes JSON and non-JSON failures without exposing response internals', async () => {
     vi.stubGlobal(
       'fetch',
