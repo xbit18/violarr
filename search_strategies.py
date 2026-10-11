@@ -22,27 +22,34 @@ def exact_query(kind, imdb_id, tmdb_id, season, episode, limit, offset):
     parameters = []
     strategies = []
     type_guard = "t.type = 'movie'" if kind == "movie" else "t.type IN ('series', 'anime')"
-    guards = [type_guard]
-    guard_params = []
-    for column, value in (("imdb_id", imdb_id), ("tmdb_id", tmdb_id)):
-        if value is not None:
-            guards.append(f"(t.{column} IS NULL OR t.{column} = %s)")
-            guard_params.append(value)
 
+    def parent_guards(exact_field=None):
+        guards = [type_guard]
+        values = []
+        for field, value in (("imdb", imdb_id), ("tmdb", tmdb_id)):
+            if value is not None and field != exact_field:
+                guards.append(f"(t.{field}_id IS NULL OR t.{field}_id = %s)")
+                values.append(value)
+        return " AND ".join(guards), values
+
+    consistency_guard = ""
+    consistency_params = []
     if kind == "tv":
-        # A missing identity is not negative evidence. Any populated disagreement
-        # with the request, parent or another file is, even in a different episode.
-        request_conflict = " OR bad.imdb_id <> %s" if imdb_id is not None else ""
-        guards.append(f"""NOT EXISTS (
-            SELECT 1 FROM files bad WHERE bad.info_hash = t.info_hash
-            AND bad.imdb_id IS NOT NULL AND (
-                bad.imdb_id <> t.imdb_id {request_conflict}
-                OR EXISTS (SELECT 1 FROM files other
-                    WHERE other.info_hash = bad.info_hash
-                    AND other.imdb_id <> bad.imdb_id)
-            ))""")
+        # Retained parent guards make the requested IMDb the only allowed
+        # populated identity. Otherwise use the parent, or (only if it is NULL)
+        # count equality classes among this candidate's files. COUNT(DISTINCT)
+        # avoids assuming MIN/MAX ordering agrees with varchar equality.
         if imdb_id is not None:
-            guard_params.append(imdb_id)
+            consistency_guard = """WHERE NOT EXISTS (
+                SELECT 1 FROM files bad WHERE bad.info_hash = t.info_hash
+                AND bad.imdb_id <> %s)"""
+            consistency_params = [imdb_id]
+        else:
+            consistency_guard = """WHERE CASE WHEN t.imdb_id IS NOT NULL THEN
+                NOT EXISTS (SELECT 1 FROM files bad
+                    WHERE bad.info_hash = t.info_hash AND bad.imdb_id <> t.imdb_id)
+                ELSE (SELECT COUNT(DISTINCT bad.imdb_id) FROM files bad
+                    WHERE bad.info_hash = t.info_hash) <= 1 END"""
 
     season_guard = ""
     season_params = []
@@ -64,9 +71,10 @@ def exact_query(kind, imdb_id, tmdb_id, season, episode, limit, offset):
             continue
         identifier = f"{kind}_{field}{suffix}"
         strategies.append(identifier)
+        guards, guard_params = parent_guards(field)
         branches.append(
             f"SELECT t.info_hash, '{identifier}' AS strategy FROM torrents t "
-            f"WHERE t.{field}_id = %s AND {' AND '.join(guards)}{season_guard}"
+            f"WHERE t.{field}_id = %s AND {guards}{season_guard}"
         )
         parameters.extend([value, *guard_params, *season_params])
 
@@ -77,18 +85,20 @@ def exact_query(kind, imdb_id, tmdb_id, season, episode, limit, offset):
             identifier = f"tv_file_imdb{suffix}"
             strategies.append(identifier)
             # The identity, season and episode must all belong to this same row.
+            guards, guard_params = parent_guards()
             branches.append(f"""SELECT t.info_hash, '{identifier}' AS strategy
                 FROM files f JOIN torrents t ON t.info_hash = f.info_hash
                 WHERE f.imdb_id = %s AND f.imdb_season = %s {file_episode_guard}
-                AND {" AND ".join(guards)}""")
+                AND {guards}""")
             parameters.extend([imdb_id, *file_params, *guard_params])
         if tmdb_id is not None:
             identifier = f"tv_file_tmdb{suffix}"
             strategies.append(identifier)
             # Files have no TMDB field: only an exact parent TMDB match supplies
             # this identity. EXISTS avoids fan-out from repeated qualifying files.
+            guards, guard_params = parent_guards("tmdb")
             branches.append(f"""SELECT t.info_hash, '{identifier}' AS strategy
-                FROM torrents t WHERE t.tmdb_id = %s AND {" AND ".join(guards)}
+                FROM torrents t WHERE t.tmdb_id = %s AND {guards}
                 AND EXISTS (SELECT 1 FROM files f WHERE f.info_hash = t.info_hash
                     AND f.imdb_season = %s {file_episode_guard})""")
             parameters.extend([tmdb_id, *guard_params, *file_params])
@@ -106,10 +116,11 @@ def exact_query(kind, imdb_id, tmdb_id, season, episode, limit, offset):
         SELECT t.title, t.size, t.seeders, t.provider, t.upload_date, t.info_hash, t.type,
                {columns}, m.match_count
         FROM merged m JOIN torrents t ON t.info_hash = m.info_hash
+        {consistency_guard}
         ORDER BY t.seeders DESC NULLS LAST, t.info_hash ASC
         LIMIT %s OFFSET %s
     """
-    return sql, (*parameters, limit, offset), tuple(strategies)
+    return sql, (*parameters, *consistency_params, limit, offset), tuple(strategies)
 
 
 def query_exact(connect, kind, imdb_id, tmdb_id, season, episode, limit, offset):

@@ -186,24 +186,24 @@ def test_database_error_is_sanitized_and_partial(store, monkeypatch):
     [
         ({"t": "search", "q": ""}, "generic_browse", (1, 0)),
         ({"t": "search", "q": " %_ "}, "generic_title", ("% %_ %", 1, 0)),
-        ({"t": "movie", "imdbid": "  "}, "movie_imdb", ("tt", "tt", 1, 0)),
+        ({"t": "movie", "imdbid": "  "}, "movie_imdb", ("tt", 1, 0)),
         (
             {"t": "movie", "imdbid": "TT12", "tmdbid": 0},
             "multi_strategy",
-            ("ttTT12", "ttTT12", 0, 0, "ttTT12", 0, 1, 0),
+            ("ttTT12", 0, 0, "ttTT12", 1, 0),
         ),
-        ({"t": "movie", "tmdbid": 0, "q": "title"}, "movie_tmdb", (0, 0, 1, 0)),
+        ({"t": "movie", "tmdbid": 0, "q": "title"}, "movie_tmdb", (0, 1, 0)),
         ({"t": "movie", "q": "title"}, "movie_title", ("%title%", 1, 0)),
         ({"t": "movie"}, "movie_empty", None),
         (
             {"t": "tvsearch", "imdbid": "12", "season": 0, "ep": 0},
             "multi_strategy",
-            ("tt12", "tt12", "tt12", 0, 0, "tt12", 0, 0, "tt12", "tt12", 1, 0),
+            ("tt12", 0, 0, "tt12", 0, 0, "tt12", "tt12", 1, 0),
         ),
         (
             {"t": "tvsearch", "imdbid": "12", "season": 1},
             "multi_strategy",
-            ("tt12", "tt12", "tt12", 1, "%S01%", "%Season 1%", "tt12", 1, "tt12", "tt12", 1, 0),
+            ("tt12", 1, "%S01%", "%Season 1%", "tt12", 1, "tt12", "tt12", 1, 0),
         ),
         (
             {"t": "tvsearch", "q": "", "season": 1, "ep": 9},
@@ -213,7 +213,7 @@ def test_database_error_is_sanitized_and_partial(store, monkeypatch):
         (
             {"t": "tvsearch", "imdbid": "12", "tmdbid": 77},
             "multi_strategy",
-            ("tt12", "tt12", 77, "tt12", 77, "tt12", 77, "tt12", 1, 0),
+            ("tt12", 77, 77, "tt12", "tt12", 1, 0),
         ),
         ({"t": "tvsearch", "q": "title"}, "tv_title", ("%title%", 1, 0)),
         ({"t": "tvsearch"}, "tv_empty", None),

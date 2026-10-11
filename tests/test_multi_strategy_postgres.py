@@ -9,9 +9,22 @@ import os
 
 import psycopg
 import pytest
+from original_exact_query import exact_query as original_query
 from psycopg.conninfo import conninfo_to_dict
 
 from search_strategies import CandidateRows, exact_query
+
+
+def compare_original(cursor, args):
+    original_sql, original_values, original_strategies = original_query(*args)
+    cursor.execute(original_sql, original_values)
+    original_rows = cursor.fetchall()
+    current_sql, current_values, current_strategies = exact_query(*args)
+    cursor.execute(current_sql, current_values)
+    current_rows = cursor.fetchall()
+    assert current_rows == original_rows
+    assert current_strategies == original_strategies
+    return current_sql, current_values, CandidateRows(current_rows, current_strategies)
 
 
 def test_exact_strategies_on_explicit_local_postgres():
@@ -52,9 +65,9 @@ def test_exact_strategies_on_explicit_local_postgres():
                         VALUES (%s, 1234, 7, %s, 'movie', %s, %s)""",
                         (hash_value, hash_value, imdb, tmdb),
                     )
-                sql, values, strategies = exact_query("movie", "tt123", 10, None, None, 2, 1)
-                cursor.execute(sql, values)
-                rows = CandidateRows(cursor.fetchall(), strategies)
+                sql, values, rows = compare_original(
+                    cursor, ("movie", "tt123", 10, None, None, 2, 1)
+                )
                 assert [row[5] for row in rows] == ["b", "c"]
                 assert rows.memberships == [("movie_imdb",), ("movie_tmdb",)]
                 cursor.execute("""UPDATE torrents SET type = 'series', imdb_season = 1,
@@ -63,13 +76,18 @@ def test_exact_strategies_on_explicit_local_postgres():
                     cursor.execute("""INSERT INTO files
                         (info_hash, title, imdb_id, imdb_season, imdb_episode)
                         VALUES ('a', 'child', 'tt123', 1, 2)""")
-                sql, values, strategies = exact_query("tv", "tt123", 10, 1, 2, 100, 0)
-                cursor.execute(sql, values)
-                rows = CandidateRows(cursor.fetchall(), strategies)
+                sql, values, rows = compare_original(cursor, ("tv", "tt123", 10, 1, 2, 100, 0))
                 assert [row[5] for row in rows] == ["a"]
                 assert rows.memberships == [
                     ("tv_file_imdb_season_episode", "tv_file_tmdb_season_episode")
                 ]
+                cursor.execute("UPDATE torrents SET imdb_id = NULL WHERE info_hash = 'a'")
+                compare_original(cursor, ("tv", None, 10, 1, 2, 100, 0))
+                cursor.execute("""INSERT INTO files
+                    (info_hash, title, imdb_id, imdb_season, imdb_episode)
+                    VALUES ('a', 'conflicting outside episode', 'tt999', 2, 9)""")
+                for ids in ((None, 10), ("tt123", None), ("tt123", 10)):
+                    compare_original(cursor, ("tv", *ids, 1, 2, 100, 0))
                 cursor.execute("EXPLAIN " + sql, values)
                 assert cursor.fetchall()
         finally:
