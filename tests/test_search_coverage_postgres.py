@@ -72,7 +72,7 @@ def test_pg_child_pack_identity_and_basename(pg):
         ('pack','tt1','Collection/Interstellar.2014.mkv'),
         ('folder',NULL,'Interstellar/Other.2014.mkv')""")
     assert [r[5] for r in fetch(pg, "movie", "tt1", 10, None, None, None)] == ["pack"]
-    assert [r[5] for r in fetch(pg, "movie", None, None, "Interstelar", None, None)] == ["pack"]
+    assert [r[5] for r in fetch(pg, "movie", None, None, "Interstellarr", None, None)] == ["pack"]
 
 
 @pytest.mark.parametrize(
@@ -102,10 +102,115 @@ def test_pg_generated_tv_pools_can_exploit_gin(pg):
     assert "coverage_files_trgm" in plan
 
 
-def test_pg_fuzzy_overflow_omits_pool_without_affecting_literal(pg):
+def test_pg_fuzzy_overflow_retains_pool_without_affecting_literal(pg):
     pg.execute("""INSERT INTO torrents(info_hash,title,type,seeders)
-        SELECT n::text, 'Interstelar.2014', 'movie', 1 FROM generate_series(1,2001) n;
+        SELECT n::text, 'Interstellarr.2014', 'movie', 1 FROM generate_series(1,2001) n;
         INSERT INTO torrents(info_hash,title,type,seeders)
         VALUES ('literal','Interstellar.2014','movie',1)""")
     rows = fetch(pg, "movie", None, None, "Interstellar", None, None)
-    assert [r[5] for r in rows] == ["literal"]
+    assert rows[0][5] == "literal"
+    assert len(rows) == 100
+    assert rows.fuzzy_pools["movie_title_fuzzy"] == {
+        "found": 2002,
+        "retained": 2000,
+        "omitted": 2,
+        "truncated": True,
+    }
+
+
+def test_pg_confidence_retention_is_not_release_metadata_or_final_order(pg, monkeypatch):
+    import search_strategies as search
+
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    pg.execute("""INSERT INTO torrents(info_hash,title,type,seeders) VALUES
+        ('a','Interstellar.2014.1080p.ITA','movie',1),
+        ('b','Interstellar.2025.2160p.ENG','movie',2),
+        ('c','Interstellarr.2014','movie',100),
+        ('exact','Unrelated','movie',0);
+        UPDATE torrents SET imdb_id='tt1' WHERE info_hash='exact'""")
+    pg.execute("""SELECT strict_word_similarity('Interstellar','Interstellar.2014.1080p.ITA'),
+        strict_word_similarity('Interstellar','Interstellar.2025.2160p.ENG')""")
+    first, second = pg.fetchone()
+    assert first == second == 1
+    rows = fetch(pg, "movie", "tt1", None, "Interstellar", None, None)
+    assert [r[5] for r in rows] == ["exact", "b", "a"]
+    assert rows.fuzzy_pools["movie_title_fuzzy"]["retained"] == 2
+    # c remains eligible but loses to confidence, regardless of its seeders.
+    assert rows.fuzzy_pools["movie_title_fuzzy"]["found"] == 3
+
+
+def test_pg_pack_duplicate_children_do_not_crowd_best_parents(pg, monkeypatch):
+    import search_strategies as search
+
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    pg.execute("""INSERT INTO torrents(info_hash,title,type,seeders) VALUES
+        ('a','Collection','movie',2), ('b','Collection','movie',2),
+        ('c','Collection','movie',1), ('bad','Collection','movie',100);
+        INSERT INTO pack_files(pack_hash,file_path)
+        SELECT 'a','Collection/Interstellar.2014.mkv' FROM generate_series(1,10);
+        INSERT INTO pack_files(pack_hash,file_path) VALUES
+        ('b','Collection/Interstellar.2014.mkv'), ('c','Collection/Interstellar.2014.mkv'),
+        ('bad','Interstellar/Other.mkv'), ('bad','Extras/Interstellar.trailer.mkv'),
+        ('bad','Interstellar.srt')""")
+    rows = fetch(pg, "movie", None, None, "Interstellarr", None, None)
+    assert [r[5] for r in rows] == ["a", "b"]
+    assert rows.deduplicated == [True, False]
+    assert rows.fuzzy_pools["movie_pack_title_fuzzy"] == {
+        "found": 3,
+        "retained": 2,
+        "omitted": 1,
+        "truncated": True,
+    }
+
+
+def test_pg_tv_invalid_prefix_episode_and_ids_cannot_consume_cap(pg, monkeypatch):
+    import search_strategies as search
+
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 1)
+    pg.execute("""INSERT INTO torrents
+        (info_hash,title,type,seeders,imdb_id,imdb_season,imdb_episode) VALUES
+        ('valid','Breaking.Bad.S01E02.2160p.ITA','series',1,NULL,1,2),
+        ('bait','Other.Show.S01E02.Breaking.Bad','series',100,NULL,1,2),
+        ('episode','Breaking.Bad.S01E09','series',100,NULL,1,9),
+        ('season','Breaking.Bad.S09E02','series',100,NULL,9,2),
+        ('conflict','Breaking.Bad.S01E02','series',100,'tt2',1,2),
+        ('mixed','Breaking.Bad.S01E02','series',100,NULL,1,2);
+        INSERT INTO files(info_hash,title,imdb_id,imdb_season,imdb_episode) VALUES
+        ('mixed','Breaking.Bad.S01E02','tt1',1,2),
+        ('mixed','Breaking.Bad.S01E02','tt2',1,2)""")
+    rows = fetch(pg, "tv", "tt1", None, "Breaking Badd", 1, 2)
+    assert [r[5] for r in rows] == ["valid"]
+    assert rows.fuzzy_pools["tv_title_fuzzy"]["found"] == 1
+
+
+@pytest.mark.parametrize("total", [1, 2, 3])
+def test_pg_fuzzy_counts_and_pagination_survive_empty_page(pg, monkeypatch, total):
+    import search_strategies as search
+
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    pg.execute(
+        """INSERT INTO torrents(info_hash,title,type,seeders)
+        SELECT n::text, 'Interstellar.2014','movie',n FROM generate_series(1,%s) n""",
+        (total,),
+    )
+    query, values, descriptors = coverage_query(
+        "movie", None, None, "Interstellarr", None, None, 1, 99
+    )
+    pg.execute(query, values)
+    empty = CandidateRows(pg.fetchall(), descriptors)
+    assert empty == []
+    assert empty.fuzzy_pools["movie_title_fuzzy"] == {
+        "found": total,
+        "retained": min(total, 2),
+        "omitted": max(total - 2, 0),
+        "truncated": total > 2,
+    }
+    complete = fetch(pg, "movie", None, None, "Interstellarr", None, None)
+    pages = []
+    for offset in range(min(total, 2)):
+        query, values, descriptors = coverage_query(
+            "movie", None, None, "Interstellarr", None, None, 1, offset
+        )
+        pg.execute(query, values)
+        pages.extend(CandidateRows(pg.fetchall(), descriptors))
+    assert pages == complete

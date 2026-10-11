@@ -53,8 +53,11 @@ def coverage_cases():
 
 def coverage_counts(cursor, generated, max_rows):
     query, values, descriptors = generated
-    complete_query = query.rsplit("LIMIT %s OFFSET %s", 1)[0]
-    cursor.execute("SELECT COUNT(*) FROM (" + complete_query + ") results", values[:-2])
+    complete_query = query.replace("LIMIT %s OFFSET %s", "")
+    cursor.execute(
+        "SELECT COUNT(*) FROM (" + complete_query + ") results WHERE info_hash IS NOT NULL",
+        values[:-2],
+    )
     total = cursor.fetchone()[0]
     if total > max_rows:
         raise ValueError("Coverage stream exceeds --max-rows; comparison aborted")

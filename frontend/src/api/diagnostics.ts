@@ -54,6 +54,7 @@ export interface StrategyExecution {
   candidates: number | null
   unique_contribution: number | null
   metadata: { field?: string | null; match_type?: string | null; source?: string | null }
+  fuzzy_pool?: { found: number; retained: number; omitted: number; truncated: boolean } | null
 }
 export interface Provenance {
   identity: string
@@ -169,7 +170,18 @@ function projectStrategies(strategies: StrategyExecution[]) {
   return strategies.slice(0, 32).map((strategy) => ({
     ...pick(strategy, ['identifier', 'status', 'duration_ms', 'candidates', 'unique_contribution']),
     metadata: projectMetadata(strategy.metadata),
+    ...(strategy.fuzzy_pool == null ? {} : { fuzzy_pool: projectFuzzyPool(strategy.fuzzy_pool) }),
   }))
+}
+function projectFuzzyPool(value: unknown) {
+  return Object.fromEntries(
+    Object.entries(pick(value, ['found', 'retained', 'omitted', 'truncated'])).filter(
+      ([key, item]) =>
+        key === 'truncated'
+          ? typeof item === 'boolean'
+          : typeof item === 'number' && Number.isSafeInteger(item) && item >= 0,
+    ),
+  )
 }
 function projectMetadata(value: unknown) {
   const metadata = pick(value, ['field', 'match_type', 'source'])

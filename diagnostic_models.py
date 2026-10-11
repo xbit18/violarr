@@ -147,6 +147,13 @@ class MatchMetadata(BaseModel):
     source: Literal["torrent", "file", "pack_file"] | None = None
 
 
+class FuzzyPool(BaseModel):
+    found: int = Field(ge=0, strict=True)
+    retained: int = Field(ge=0, strict=True)
+    omitted: int = Field(ge=0, strict=True)
+    truncated: bool = Field(strict=True)
+
+
 class StrategyExecution(BaseModel):
     identifier: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
     status: Literal["running", "success", "partial", "failed"]
@@ -154,6 +161,7 @@ class StrategyExecution(BaseModel):
     candidates: int | None = Field(default=None, ge=0)
     unique_contribution: int | None = Field(default=None, ge=0)
     metadata: MatchMetadata
+    fuzzy_pool: FuzzyPool | None = None
 
 
 class MatchEvidence(MatchMetadata):

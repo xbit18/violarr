@@ -76,10 +76,22 @@ tier, while its identity source remains `torrent`. The strongest observed
 membership wins; within each tier, seeders descend (NULL last), then hash
 ascends. Similarity does not order within a tier. Preset/rule ranking remains
 window-local. Pack evidence identifies a child match but the release metadata
-stays parent-owned; child identifiers and paths are not exported. Fuzzy pools
-over 2000 rows are omitted, and short/generic terms may not use fuzzy recovery.
-A zero fuzzy count is not proof of no approximate match. See
+stays parent-owned; child identifiers and paths are not exported. Fuzzy sources
+retain up to 2000 eligible distinct parents by title confidence, then seeders
+and deterministic keys; overflowing sources are not discarded. All guards and
+best-child reduction precede selection. This confidence affects retention only,
+not final tier ordering. Short/generic terms may not use fuzzy recovery. A zero
+fuzzy count is not proof of no approximate match. See
 [coverage limits](../reference/torznab-capabilities).
+
+When observed, strategy `fuzzy_pool` in report/history JSON provides `found`
+(distinct eligible parents before cap), `retained` (after cap), `omitted` (the
+difference) and `truncated` (positive difference). Invalid matches are not
+omissions. These same-query totals precede pagination and remain available for
+empty pages; do not sum them across repeated inspected windows. They are
+separate from window membership/filter counts and from report-level
+privacy/detail truncation. Missing/null means unavailable, not zero. No
+confidence, raw hashes, child paths or independent branch timings are added.
 
 ## Observe client requests
 

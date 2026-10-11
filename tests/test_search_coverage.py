@@ -120,17 +120,251 @@ def test_fuzzy_sql_is_index_supported_bounded_and_not_score_ordered():
     assert "%%>>" in sql
     assert "strict_word_similarity" in sql
     # Extent similarity alone can match an episode name after the series name.
-    assert "AND similarity(%s, identity_title)" in sql
-    assert "LIMIT 2001" in sql
+    assert "prefix_confidence >= 0.75" in sql
+    assert "LIMIT 2000" in sql
+    assert "LIMIT 2001" not in sql
     assert "COUNT(*)" in sql
     assert "Breaking Badd" not in sql
     assert values[-2:] == (20, 4)
     assert "tv_title_fuzzy" in strategies
     assert (
-        sql.rsplit("ORDER BY", 1)[1]
+        sql.split("LIMIT %s OFFSET %s", 1)[0]
+        .rsplit("ORDER BY", 1)[1]
         .strip()
         .startswith("m.tier ASC, t.seeders DESC NULLS LAST, t.info_hash ASC")
     )
+
+
+class SelectionSQL(TextSQL):
+    """Execute selection/guards with supplied scores, NOT a pg_trgm emulator."""
+
+    def __init__(self, scores):
+        super().__init__()
+        self.db.create_function("discovered", 2, lambda title, query: title in scores)
+        self.db.create_function(
+            "strict_word_similarity", 2, lambda query, title: scores.get(title, (0, 0))[0]
+        )
+        self.db.create_function("similarity", 2, lambda query, title: scores.get(title, (0, 0))[1])
+        self.db.create_function("LEAST", 2, min)
+
+    def execute(self, sql, values):
+        sql = re.sub(r"(\w+\.\w+) %%>> %s", r"discovered(\1, %s)", sql)
+        super().execute(sql, values)
+
+
+def fuzzy_rows(db, kind="movie", imdb=None, season=None, ep=None, limit=100, offset=0):
+    sql, values, descriptors = search.coverage_query(
+        kind, imdb, None, "Target Movie", season, ep, limit, offset
+    )
+    db.execute(sql, values)
+    return search.CandidateRows(db.fetchall(), descriptors)
+
+
+@pytest.mark.parametrize("total", [1, 2, 3, 6])
+def test_fuzzy_retention_cap_confidence_seeders_and_page_stats(monkeypatch, total):
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    scores = {f"Typo {n}": (0.99 - n * 0.02, 1) for n in range(total)}
+    db = SelectionSQL(scores)
+    try:
+        for n in range(total):
+            db.torrent(str(n), title=f"Typo {n}", seeders=n + 1)
+        rows = fuzzy_rows(db)
+        assert {r[5] for r in rows} == {str(n) for n in range(min(total, 2))}
+        assert rows.fuzzy_pools["movie_title_fuzzy"] == {
+            "found": total,
+            "retained": min(total, 2),
+            "omitted": max(total - 2, 0),
+            "truncated": total > 2,
+        }
+        assert fuzzy_rows(db, limit=1) + fuzzy_rows(db, limit=1, offset=1) == rows
+        empty = fuzzy_rows(db, offset=100)
+        assert empty == []
+        assert empty.fuzzy_pools == rows.fuzzy_pools
+    finally:
+        db.db.close()
+
+
+def test_fuzzy_parent_reduction_ties_invalid_evidence_and_exact_survival(monkeypatch):
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    db = SelectionSQL({"Typo.mkv": (0.9, 1), "Bad.mkv": (0.7, 1)})
+    try:
+        for name, seeders in [("a", 2), ("b", 2), ("c", 1), ("null", None)]:
+            db.torrent(name, title="Collection", seeders=seeders)
+            for _ in range(5 if name == "a" else 1):
+                db.db.execute(
+                    "INSERT INTO pack_files(pack_hash,file_path) VALUES (?,?)", (name, "Typo.mkv")
+                )
+        db.torrent("invalid", title="Collection", seeders=100)
+        db.db.execute("INSERT INTO pack_files(pack_hash,file_path) VALUES ('invalid','Bad.mkv')")
+        db.torrent("exact", title="Different", imdb="tt1", seeders=0)
+        rows = fuzzy_rows(db, imdb="tt1")
+        assert [r[5] for r in rows] == ["exact", "a", "b"]
+        assert rows.deduplicated[1] is True
+        assert rows.fuzzy_pools["movie_pack_title_fuzzy"]["found"] == 4
+    finally:
+        db.db.close()
+
+
+def test_fuzzy_tv_guards_and_prefix_precede_selection(monkeypatch):
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 1)
+    db = SelectionSQL({"Typo": (0.9, 0.9), "Bait": (0.99, 0.7)})
+    try:
+        for name, title, imdb, season, ep in [
+            ("valid", "Typo", None, 1, 2),
+            ("prefix", "Bait", None, 1, 2),
+            ("wrong_ep", "Typo", None, 1, 9),
+            ("wrong_season", "Typo", None, 9, 2),
+            ("conflict", "Typo", "tt2", 1, 2),
+            ("mixed", "Typo", None, 1, 2),
+        ]:
+            db.torrent(
+                name,
+                title=title,
+                imdb=imdb,
+                kind="series",
+                season=season,
+                episode=ep,
+                seeders=1 if name == "valid" else 100,
+            )
+        db.file("mixed", imdb="tt1", episode=2)
+        db.file("mixed", imdb="tt2", episode=2)
+        rows = fuzzy_rows(db, "tv", "tt1", 1, 2)
+        assert [r[5] for r in rows] == ["valid"]
+        assert rows.fuzzy_pools["tv_title_fuzzy"]["found"] == 1
+    finally:
+        db.db.close()
+
+
+def test_fuzzy_tv_file_same_row_best_identity_and_minimum_score(monkeypatch):
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    scores = {
+        "Strong Title": (0.99, 0.8),
+        "Balanced Title": (0.9, 0.9),
+        "Weak Title": (0.78, 0.78),
+        "Bad Title": (0.99, 0.7),
+    }
+    db = SelectionSQL(scores)
+    try:
+        for name, seeders in [("balanced", 1), ("strong", 2), ("weak", 100), ("split", 100)]:
+            db.torrent(name, title="Collection", kind="series", seeders=seeders)
+        for name, title, episode in [
+            ("balanced", "Bad Title", 2),
+            ("balanced", "Balanced Title", 2),
+            ("strong", "Strong Title", 2),
+            ("weak", "Weak Title", 2),
+            ("split", "Balanced Title", 9),
+            ("split", "episode", 2),
+        ]:
+            db.file(name, imdb="tt1", episode=episode)
+            db.db.execute("UPDATE files SET title=? WHERE id=(SELECT MAX(id) FROM files)", (title,))
+        # No requested ID: exact file membership must not mask fuzzy selection.
+        rows = fuzzy_rows(db, "tv", None, 1, 2)
+        assert [r[5] for r in rows] == ["strong", "balanced"]
+        assert rows.fuzzy_pools["tv_file_title_season_episode_fuzzy"] == {
+            "found": 3,
+            "retained": 2,
+            "omitted": 1,
+            "truncated": True,
+        }
+    finally:
+        db.db.close()
+
+
+def test_fuzzy_absent_from_id_only_and_numeric_paths():
+    for q in (None, "883", "1080p WEB-DL"):
+        sql, values, descriptors = search.coverage_query("tv", "tt1", 10, q, 1, 2, 1, 0)
+        assert "fuzzy" not in " ".join(descriptors)
+        assert "confidence" not in sql and "stats" not in sql
+        assert len(values) == sql.count("%s")
+
+
+@pytest.mark.parametrize("total", [0, 3])
+def test_fuzzy_benchmark_private_envelope_is_not_a_result(monkeypatch, total):
+    from types import SimpleNamespace
+
+    import benchmark_multi_strategy_postgres as benchmark
+
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 2)
+    db = SelectionSQL({"Typo": (0.9, 1)})
+    try:
+        for n in range(total):
+            db.torrent(str(n), title="Typo")
+        cursor = SimpleNamespace(
+            execute=db.execute, fetchall=db.fetchall, fetchone=lambda: db.result.fetchone()
+        )
+        query = search.coverage_query("movie", None, None, "Target Movie", None, None, 1, 99)
+        metrics = benchmark.coverage_counts(cursor, query, 10)
+        assert metrics["candidate_stream_total"] == min(total, 2)
+        assert metrics["returned_page"] == 0
+    finally:
+        db.db.close()
+
+
+def test_fuzzy_pool_observation_validation_mutation_and_history(monkeypatch):
+    from search_diagnostics import ObservationFacade, SearchCollector
+    from search_monitor import SearchMonitor
+
+    collector = SearchCollector(detailed=False)
+    collector.versions("test", None)
+    facade = ObservationFacade(collector)
+    facade.merged_begin({"movie_title_fuzzy": {"field": "title", "match_type": "fuzzy"}})
+    pools = {"movie_title_fuzzy": {"found": 3, "retained": 2, "omitted": 1, "truncated": True}}
+    facade.fuzzy_pools(pools)
+    facade.merged_window([], 1, 99, {}, [], [])
+    collector.finish()
+    report = collector.snapshot()
+    assert report["strategies"][0]["fuzzy_pool"] == pools["movie_title_fuzzy"]
+    assert report["truncated"] is False and report["replayable"] is True
+    monitor = SearchMonitor()
+    monitor.configure(True)
+    monitor.append(report, 200, 1, monitor.reserve())
+    assert monitor.recent()[0]["strategies"][0]["fuzzy_pool"] == pools["movie_title_fuzzy"]
+
+    def mutate(observed):
+        observed["movie_title_fuzzy"]["found"] = -1
+        raise RuntimeError("private failure")
+
+    monkeypatch.setattr(collector, "fuzzy_pools", mutate)
+    facade.fuzzy_pools(pools)
+    assert pools["movie_title_fuzzy"]["found"] == 3
+    assert "private failure" not in str(collector.report)
+
+
+@pytest.mark.parametrize("detailed", [True, False])
+def test_fuzzy_diagnostics_numeric_pool_fault_isolation(monkeypatch, tmp_path, detailed):
+    monkeypatch.setattr(search, "FUZZY_CANDIDATES", 1)
+    db = SelectionSQL({"Typo": (0.9, 1)})
+    monkeypatch.setattr(backend, "get_conn", lambda: db)
+    monkeypatch.setattr(
+        backend, "SETTINGS_STORE", SettingsStore(tmp_path / "settings.json", environ={})
+    )
+    # The harness ignores only the transaction-local threshold statement.
+    original_execute = db.execute
+    db.execute = lambda sql, values=(): (
+        None if sql.startswith("SET LOCAL") else original_execute(sql, values)
+    )
+    try:
+        db.torrent("private-hash", title="Typo")
+        collector = backend.SearchCollector(detailed=detailed)
+        xml = backend.execute_search(t="movie", q="Target Movie", offset=100, collector=collector)
+        collector.versions("test", None)
+        report = collector.snapshot()
+        pool = next(s for s in report["strategies"] if s["identifier"] == "movie_title_fuzzy")[
+            "fuzzy_pool"
+        ]
+        assert pool == {"found": 1, "retained": 1, "omitted": 0, "truncated": False}
+        assert report["counts"]["candidates"] == 0
+        assert "private-hash" not in str(report)
+        assert all(s["duration_ms"] is None for s in report["strategies"])
+        monkeypatch.setattr(
+            collector, "fuzzy_pools", lambda *a: (_ for _ in ()).throw(RuntimeError())
+        )
+        assert (
+            backend.execute_search(t="movie", q="Target Movie", offset=100, collector=collector)
+            == xml
+        )
+    finally:
+        db.db.close()
 
 
 def test_short_numeric_title_keeps_literal_without_fuzzy():

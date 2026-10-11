@@ -84,10 +84,24 @@ tramite file resta nel secondo livello, ma la fonte dell'identità rimane
 sono decrescenti (NULL in fondo), poi l'hash crescente. La similarità non ordina
 dentro un livello. Preset e regole restano locali alla finestra. Un abbinamento
 nel pacchetto non sostituisce i metadati del torrent; identificatori e percorsi
-dei figli non vengono esportati. Gli insiemi fuzzy oltre 2000 righe sono omessi
-e termini brevi o generici possono non usare il fuzzy. Un conteggio fuzzy nullo
-non prova l'assenza di abbinamenti approssimativi. Consulta i
+dei figli non vengono esportati. Ogni fonte fuzzy conserva fino a 2000 torrent
+distinti idonei per confidenza del titolo, poi seeder e chiavi deterministiche;
+il superamento del limite non elimina l'intero insieme. I controlli e la scelta
+della migliore evidenza del file precedono la selezione. La confidenza riguarda
+solo il sottoinsieme conservato, non l'ordine finale dei livelli. Termini brevi
+o generici possono non usare il fuzzy. Un conteggio fuzzy nullo non prova
+l'assenza di abbinamenti approssimativi. Consulta i
 [limiti di copertura](../reference/torznab-capabilities).
+
+Quando osservato, `fuzzy_pool` nelle strategie del JSON di report e cronologia
+contiene `found` (torrent distinti idonei prima del limite), `retained` (dopo il
+limite), `omitted` (la differenza) e `truncated` (differenza positiva).
+Abbinamenti non validi non sono omissioni. Questi totali provengono dalla stessa
+query, precedono la paginazione e restano disponibili per pagine vuote; non
+vanno sommati tra finestre ripetute. Sono separati dai conteggi della finestra e
+dal troncamento del report per privacy o limiti dei dettagli. Valori
+assenti/null indicano dati non disponibili, non zero. Non si aggiungono
+confidenza, hash originali, percorsi dei figli o tempi indipendenti dei rami.
 
 ## Osservare le richieste dei client
 

@@ -73,14 +73,20 @@ alphanumeric characters and a nonnumeric token of four characters; `883` retains
 literal matching without typo expansion. Similarity is an eligibility check, not
 ordering within a tier. Existing presets may still reorder each 1000-row window.
 
-Each fuzzy source uses the existing GIN index shape and a page-independent pool.
-Pools over 2000 rows are omitted; exact/literal matches remain available. Broad
-titles may therefore miss fuzzy results, and the pool does not bound all
-database work. No snapshot/schema/index mutation occurs. Historical snapshots
-may lack the required `pack_files` or pg_trgm/index coverage; a sanitized
-database failure does not imply the release is absent. Real plans and latency
-require separately authorized PostgreSQL measurements, not SQLite tests or
-capabilities XML alone.
+Each fuzzy source uses the existing GIN index shape and retains up to 2000
+distinct eligible parents, independent of the page. All identity, episode,
+filename and confidence guards run before this cap. Repeated children use their
+best qualifying title evidence, so they do not crowd other parents. Overflow
+retains the best matches by title confidence, then seeders (NULL last), hash and
+child key. Movie confidence uses strict-word title/basename similarity; TV uses
+the minimum of strict-word and leading-series similarity. This selection score
+does not change final four-tier/seeders/hash ordering. Exact/literal matches
+remain available. Broad queries can still omit lower-ranked fuzzy parents; LIMIT
+bounds retained candidates, not discovery, validation, sorting or runtime. No
+snapshot/schema/index mutation occurs. Historical snapshots may lack the
+required `pack_files` or pg_trgm/index coverage; a sanitized database failure
+does not imply the release is absent. Real plans and latency require separately
+authorized PostgreSQL measurements, not SQLite tests or capabilities XML alone.
 
 ## Categories
 

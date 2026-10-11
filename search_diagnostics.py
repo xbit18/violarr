@@ -231,7 +231,7 @@ class SearchCollector:
             next(iter(strategies), None) if len(strategies) <= 1 else "multi_strategy"
         )
         if any("fuzzy" in name for name in strategies):
-            limitation = "Fuzzy pools exceeding 2000 rows are omitted; short or generic titles do not use fuzzy lookup."
+            limitation = "Fuzzy pools retain up to 2000 eligible parents per source by confidence, seeders and hash; pool counts precede pagination."
             if limitation not in self.report["limitations"]:
                 self.report["limitations"].append(limitation)
         self.shared_strategies = {}
@@ -258,6 +258,15 @@ class SearchCollector:
             }
             self.report["strategies"].append(entry)
             self.shared_strategies[identifier] = entry
+
+    def fuzzy_pools(self, pools):
+        from diagnostic_models import FuzzyPool
+
+        for identifier, pool in pools.items():
+            if identifier in self.shared_strategies:
+                self.shared_strategies[identifier]["fuzzy_pool"] = FuzzyPool.model_validate(
+                    pool
+                ).model_dump()
 
     def merged_window(self, rows, limit, offset, strategies, memberships, deduplicated):
         """Contributions are exclusive memberships in this fetched window.
@@ -608,6 +617,9 @@ class ObservationFacade:
 
     def merged_begin(self, strategies):
         self._call("merged_begin", strategies)
+
+    def fuzzy_pools(self, pools):
+        self._call("fuzzy_pools", pools)
 
     def page(self, offset, indices):
         self._call("page", offset, indices)

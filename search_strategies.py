@@ -9,6 +9,21 @@ class CandidateRows(list):
     """Seven-field public rows with private, observed SQL strategy memberships."""
 
     def __init__(self, raw_rows, strategies):
+        width = 8 + len(strategies)
+        fuzzy_names = [name for name in strategies if name.endswith("_fuzzy")]
+        self.fuzzy_pools = {}
+        if raw_rows and len(raw_rows[0]) > width:
+            # One private statistics envelope survives even an empty SQL page.
+            stats = raw_rows[0][width + 1 :]
+            for index, name in enumerate(fuzzy_names):
+                found, retained = stats[index * 2 : index * 2 + 2]
+                self.fuzzy_pools[name] = {
+                    "found": found,
+                    "retained": retained,
+                    "omitted": found - retained,
+                    "truncated": found > retained,
+                }
+            raw_rows = [row[:width] for row in raw_rows if row[width]]
         super().__init__(tuple(row[:7]) for row in raw_rows)
         self.strategies = strategies
         self.memberships = [
@@ -109,7 +124,16 @@ def _exact_parts(kind, imdb_id, tmdb_id, season, episode):
 
 
 def _merge(
-    branches, parameters, strategies, guard, guard_params, limit, offset, tiers=None, ctes=()
+    branches,
+    parameters,
+    strategies,
+    guard,
+    guard_params,
+    limit,
+    offset,
+    tiers=None,
+    ctes=(),
+    fuzzy_pools=(),
 ):
     if not branches:
         return None, (), strategies
@@ -126,18 +150,49 @@ def _merge(
         tier = f", MIN(CASE strategy {cases} END) AS tier"
         order = "m.tier ASC, "
     prefix = ", ".join(ctes)
+    match_count = "SUM(evidence_count)" if fuzzy_pools else "COUNT(*)"
+    private_tier = ", m.tier AS tier" if fuzzy_pools else ""
     sql = f"""
-        WITH {prefix + ", " if prefix else ""}matches AS ({" UNION ALL ".join(branches)}),
-        merged AS (SELECT info_hash, {memberships}, COUNT(*) AS match_count
+        WITH {prefix + ", " if prefix and not fuzzy_pools else ""}matches AS ({" UNION ALL ".join(branches)}),
+        merged AS (SELECT info_hash, {memberships}, {match_count} AS match_count
                    {tier}
                    FROM matches GROUP BY info_hash)
         SELECT t.title, t.size, t.seeders, t.provider, t.upload_date, t.info_hash, t.type,
-               {columns}, m.match_count
+               {columns}, m.match_count{private_tier}
         FROM merged m JOIN torrents t ON t.info_hash = m.info_hash
         {guard}
         ORDER BY {order}t.seeders DESC NULLS LAST, t.info_hash ASC
         LIMIT %s OFFSET %s
     """
+    if fuzzy_pools:
+        # Statistics are numeric, per execution, and independent of pagination.
+        # The singleton left join returns a private sentinel, never a fake release.
+        stats = ", ".join(
+            f"(SELECT COUNT(*) FROM {pool}_parents) AS found_{i}, "
+            f"(SELECT COUNT(*) FROM {pool}) AS retained_{i}"
+            for i, pool in enumerate(fuzzy_pools)
+        )
+        public = ", ".join(
+            f"page.{column}"
+            for column in (
+                "title",
+                "size",
+                "seeders",
+                "provider",
+                "upload_date",
+                "info_hash",
+                "type",
+            )
+        )
+        flags = ", ".join(f"page.matched_{i}" for i in range(len(strategies)))
+        counts = ", ".join(f"stats.found_{i}, stats.retained_{i}" for i in range(len(fuzzy_pools)))
+        sql = f"""
+            WITH {prefix}, page AS ({sql}), stats AS (SELECT {stats})
+            SELECT {public}, {flags}, page.match_count,
+                   page.info_hash IS NOT NULL AS present, {counts}
+            FROM stats LEFT JOIN page ON TRUE
+            ORDER BY page.tier ASC, page.seeders DESC NULLS LAST, page.info_hash ASC
+        """
     return sql, (*parameters, *guard_params, limit, offset), strategies
 
 
@@ -182,8 +237,8 @@ def title_terms(query):
 def coverage_query(kind, imdb_id, tmdb_id, q, season, episode, limit, offset, *, fuzzy=True):
     """Exact IDs plus qualified text; no similarity ordering within a tier.
 
-    Fuzzy pools are deterministic, page-independent and discarded on overflow.
-    Existing GIN indexes supply candidates; functions validate only these pools.
+    Fuzzy pools retain the best eligible distinct parents, independent of page.
+    Confidence orders retention only; the final tier/seeders/hash order is unchanged.
     """
     branches, parameters, names, guard, guard_params = _exact_parts(
         kind, imdb_id, tmdb_id, season, episode
@@ -198,7 +253,7 @@ def coverage_query(kind, imdb_id, tmdb_id, q, season, episode, limit, offset, *,
             "match_type": "exact",
             "source": "file" if name.startswith("tv_file_imdb") else "torrent",
         }
-    ctes, cte_values = [], []
+    ctes, cte_values, fuzzy_pools = [], [], []
 
     def add(name, sql, values, metadata, tier):
         branches.append(sql)
@@ -326,7 +381,7 @@ def coverage_query(kind, imdb_id, tmdb_id, q, season, episode, limit, offset, *,
         )
         if not fuzzy:
             continue
-        pool = f"fuzzy_{len(ctes)}"
+        pool = f"fuzzy_{len(fuzzy_pools)}"
         # Extract only the leading series identity, never an episode's name.
         series = identity
         if kind == "tv":
@@ -335,22 +390,48 @@ def coverage_query(kind, imdb_id, tmdb_id, q, season, episode, limit, offset, *,
             )
             leading = rf"^([\W_]*([^\W_]+[\W_]+){{{len(terms) - 1}}}[^\W_]+).*$"
             series = f"regexp_replace({series}, '{leading}', '\\1', 'i')"
-        ctes.append(f"""{pool} AS MATERIALIZED (
-            SELECT t.info_hash, {series} AS identity_title FROM {relation}
-            WHERE {conditions} AND {column} %%>> %s
-            ORDER BY {ordering} LIMIT {FUZZY_CANDIDATES + 1})""")
-        cte_values.extend([*values, text])
+        child_key = ordering.split(", ")[-1] if source != "torrent" else "0"
+        consistency = " AND " + guard.removeprefix("WHERE ") if guard else ""
+        ctes.append(f"""{pool}_discovered AS (
+            SELECT t.info_hash, t.seeders, {child_key} AS child_key,
+                   {series} AS identity_title FROM {relation}
+            WHERE {conditions} AND {column} %%>> %s{consistency})""")
+        cte_values.extend([*values, text, *guard_params])
+        prefix_score = "similarity(%s, identity_title)" if kind == "tv" else "1.0"
+        ctes.append(f"""{pool}_scored AS (
+            SELECT *, strict_word_similarity(%s, identity_title) AS title_confidence,
+                   {prefix_score} AS prefix_confidence FROM {pool}_discovered),
+            {pool}_eligible AS (
+                SELECT *, LEAST(title_confidence, prefix_confidence) AS confidence
+                FROM {pool}_scored
+                WHERE title_confidence >= 0.75 AND prefix_confidence >= 0.75),
+            {pool}_parents AS MATERIALIZED (
+                SELECT info_hash, seeders, child_key, confidence, evidence_count FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY info_hash ORDER BY confidence DESC, child_key ASC) AS position,
+                        COUNT(*) OVER (PARTITION BY info_hash) AS evidence_count
+                    FROM {pool}_eligible) evidence WHERE position = 1),
+            {pool} AS MATERIALIZED (
+                SELECT * FROM {pool}_parents
+                ORDER BY confidence DESC, seeders DESC NULLS LAST, info_hash ASC, child_key ASC
+                LIMIT {FUZZY_CANDIDATES})""")
+        cte_values.extend([text, text] if kind == "tv" else [text])
+        fuzzy_pools.append(pool)
         name = origin + "_fuzzy"
-        prefix_guard = " AND similarity(%s, identity_title) >= 0.75" if kind == "tv" else ""
         add(
             name,
-            f"""SELECT info_hash, '{name}' AS strategy FROM {pool}
-            WHERE (SELECT COUNT(*) FROM {pool}) <= {FUZZY_CANDIDATES}
-            AND strict_word_similarity(%s, identity_title) >= 0.75{prefix_guard}""",
-            [text, text] if kind == "tv" else [text],
+            f"SELECT info_hash, '{name}' AS strategy, evidence_count FROM {pool}",
+            [],
             {"field": "title", "match_type": "fuzzy", "source": source},
             3,
         )
+    if fuzzy_pools:
+        branches = [
+            branch
+            if name.endswith("_fuzzy")
+            else f"SELECT info_hash, strategy, 1 AS evidence_count FROM ({branch}) evidence"
+            for name, branch in zip(descriptors, branches, strict=True)
+        ]
     return _merge(
         branches,
         [*cte_values, *parameters],
@@ -361,6 +442,7 @@ def coverage_query(kind, imdb_id, tmdb_id, q, season, episode, limit, offset, *,
         offset,
         tiers,
         ctes,
+        fuzzy_pools,
     )
 
 
@@ -377,7 +459,10 @@ def query_coverage(connect, kind, imdb_id, tmdb_id, q, season, episode, limit, o
         if "fuzzy" in " ".join(descriptors):
             cursor.execute("SET LOCAL pg_trgm.strict_word_similarity_threshold = 0.6")
         cursor.execute(sql, values)
-        return CandidateRows(cursor.fetchall(), descriptors)
+        rows = CandidateRows(cursor.fetchall(), descriptors)
+        if collector is not None and rows.fuzzy_pools:
+            collector.fuzzy_pools(rows.fuzzy_pools)
+        return rows
 
 
 def query_exact(connect, kind, imdb_id, tmdb_id, season, episode, limit, offset):

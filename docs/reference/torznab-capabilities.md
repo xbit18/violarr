@@ -78,14 +78,22 @@ ricerca letterale senza espansione dei refusi. La similarità valida l'idoneità
 non ordina dentro un livello; i preset possono riordinare ogni finestra di 1000
 righe.
 
-Ogni fonte fuzzy usa un insieme indipendente dalla pagina, compatibile con gli
-indici GIN esistenti. Oltre 2000 righe l'insieme viene omesso, mantenendo gli
-abbinamenti esatti e letterali. Titoli generici possono quindi perdere risultati
-fuzzy; il limite non vincola tutto il lavoro del database. Non vengono
-modificati snapshot, schema o indici. Snapshot storici possono non offrire
-`pack_files` o pg_trgm/indici necessari: un errore database sanificato non prova
-l'assenza della release. Piani e latenza richiedono misure PostgreSQL
-autorizzate separatamente.
+Ogni fonte fuzzy usa gli indici GIN esistenti e conserva fino a 2000 torrent
+distinti idonei, indipendentemente dalla pagina. I controlli su identità,
+episodio, nome del file e confidenza precedono il limite. File ripetuti usano la
+migliore evidenza di titolo per torrent, senza occupare posti destinati ad altri
+torrent. Oltre il limite si conservano le migliori corrispondenze per confidenza
+del titolo, poi seeder (NULL in fondo), hash e chiave del file. Per i film si
+usa la similarità strict-word del titolo/nome del file; per la TV il minimo tra
+strict-word e similarità del prefisso della serie. Questo punteggio seleziona il
+sottoinsieme, senza cambiare l'ordine finale per quattro livelli, seeder e hash.
+Gli abbinamenti esatti e letterali restano disponibili. Query ampie possono
+perdere torrent fuzzy meno rilevanti; LIMIT non garantisce tempi massimi né
+limita scoperta, validazione e ordinamento nel database. Non vengono modificati
+snapshot, schema o indici. Snapshot storici possono non offrire `pack_files` o
+pg_trgm/indici necessari: un errore database sanificato non prova l'assenza
+della release. Piani e latenza richiedono misure PostgreSQL autorizzate
+separatamente.
 
 ## Categorie
 

@@ -142,12 +142,34 @@ similarity 0.75 after stripping season/episode suffixes, never matching an episo
 name independently. Season/episode metadata must qualify the parent or one child
 row; title hints alone do not prove an episode for text searches.
 
-Each fuzzy source examines at most 2001 candidate rows in deterministic hash/id
-order, independent of the requested page. A pool exceeding 2000 is omitted rather
-than returning a truncated arbitrary subset; exact/literal branches still apply.
+Each fuzzy source validates all discovered evidence before selecting up to 2000
+distinct eligible parents, independent of the requested page. Type/identity,
+episode, mixed-series, filename and confidence guards precede this cap. Repeated
+children reduce to their best eligible evidence per parent; multiplicity remains
+private diagnostic evidence. Overflow retains the best parents rather than
+discarding the source. Selection orders title confidence descending, then parent
+seeders descending (NULL last), hash ascending and child key ascending. Movie/pack
+confidence is strict-word similarity against the title/basename; TV confidence is
+the minimum of strict-word and leading-series prefix similarity. No separate
+release-year, quality or language bonuses are added. Confidence affects source
+retention only: final four-tier/seeders/hash ordering and exact/literal behavior
+remain unchanged.
+
+Optional strategy `fuzzy_pool` counts come from the same SQL execution: `found`
+is distinct eligible parents before the cap, `retained` is after the cap,
+`omitted` is their difference, and `truncated` indicates a positive difference.
+Invalid matches are not counted as omissions. These per-source/per-execution
+totals survive empty pages, are not summed across repeated windows, and are
+separate from fetched-window membership/filter counts. Unobserved counts are
+null/absent. A private singleton statistics envelope never becomes a public
+torrent row. Branch durations remain null; report-level truncation/replayability
+is not affected by source truncation. No confidence or child identifiers/paths
+are exported.
 These bounds do not limit index candidate discovery, final aggregation, sort or
 large-offset cost. No full-table similarity ORDER BY, new index, extension install,
-runtime schema mutation, or upstream data correction is introduced. Confirmed PG16
+runtime schema mutation, or upstream data correction is introduced. Confidence
+sorting is limited to operator-discovered, guard-qualified evidence, not an
+unrestricted whole-table similarity sort. Confirmed PG16
 pg_trgm 1.6/index coverage applies to the current test schema, not all historical
 snapshots; unsupported schemas produce the existing sanitized database failure.
 
