@@ -95,6 +95,7 @@ def test_image_keeps_frontend_build_and_all_runtime_modules():
         "diagnostic_models.py",
         "search_diagnostics.py",
         "search_monitor.py",
+        "search_strategies.py",
         "prowlarr.py",
         "webapi.py",
         "entrypoint.sh",

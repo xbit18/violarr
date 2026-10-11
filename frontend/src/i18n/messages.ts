@@ -15,7 +15,7 @@ export const italianMessages = {
   'diagnostics.limit': 'Limite',
   'diagnostics.offset': 'Offset',
   'diagnostics.ignored':
-    'Le categorie sono accettate ma non filtrano la ricerca attuale. TMDb non è supportato per le serie TV. Una ricerca vuota mantiene il comportamento Torznab.',
+    'Le categorie sono accettate ma non filtrano la ricerca attuale. IMDb e TMDb sono supportati per film e serie TV. Una ricerca vuota mantiene il comportamento Torznab.',
   'diagnostics.run': 'Esegui diagnostica',
   'diagnostics.export': 'Esporta report',
   'diagnostics.loading': 'Diagnostica in corso…',
@@ -348,7 +348,7 @@ export const englishMessages: Messages = {
   'diagnostics.limit': 'Limit',
   'diagnostics.offset': 'Offset',
   'diagnostics.ignored':
-    'Categories are accepted but do not filter the current search. TMDb is not supported for TV searches. An empty search preserves Torznab behavior.',
+    'Categories are accepted but do not filter the current search. IMDb and TMDb are supported for movies and TV. An empty search preserves Torznab behavior.',
   'diagnostics.run': 'Run diagnostics',
   'diagnostics.export': 'Export report',
   'diagnostics.loading': 'Running diagnostics…',

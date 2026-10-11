@@ -254,6 +254,44 @@ describe('diagnostics', () => {
     vi.restoreAllMocks()
   })
 
+  it('submits TV TMDB together with IMDb and episode parameters', async () => {
+    mount()
+    await fireEvent.update(screen.getByRole('combobox'), 'tvsearch')
+    await fireEvent.click(screen.getByRole('button', { name: 'Advanced parameters' }))
+    await fireEvent.update(screen.getByLabelText('IMDb ID'), 'tt26545971')
+    await fireEvent.update(screen.getByLabelText('TMDb ID'), '273419')
+    await fireEvent.update(screen.getByLabelText('Season'), '1')
+    await fireEvent.update(screen.getByLabelText('Episode'), '2')
+    await run()
+    const call = fetchMock.mock.calls.find(([path]) => path.endsWith('/diagnostics/search'))!
+    expect(JSON.parse(call[1].body)).toMatchObject({
+      t: 'tvsearch',
+      imdbid: 'tt26545971',
+      tmdbid: 273419,
+      season: 1,
+      ep: 2,
+    })
+  })
+
+  it('renders and exports unavailable independent strategy timings and safe source evidence', async () => {
+    const r = reportV2()
+    const merged = {
+      ...r,
+      strategies: r.strategies.map((s) => ({
+        ...s,
+        duration_ms: null,
+        metadata: { field: 'imdb', match_type: 'exact', source: 'file' },
+      })),
+    }
+    fetchMock.mockResolvedValue(json(merged))
+    mount()
+    await run()
+    expect(screen.getByText('synthetic_exact')).toBeTruthy()
+    const exported = JSON.parse(exportReport(merged as unknown as SearchReport))
+    expect(exported.strategies[0].duration_ms).toBeNull()
+    expect(exported.strategies[0].metadata.source).toBe('file')
+  })
+
   it('renders v2 strategy executions, optional phases and unavailable provenance facts', async () => {
     fetchMock.mockResolvedValue(json(reportV2()))
     mount()
@@ -342,7 +380,7 @@ describe('diagnostics', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Advanced parameters' }))
     expect(screen.queryByLabelText('Season')).toBeNull()
     await fireEvent.update(screen.getByLabelText('Search type'), 'tvsearch')
-    expect(screen.queryByLabelText('TMDb ID')).toBeNull()
+    expect(screen.getByLabelText('TMDb ID')).toBeTruthy()
     await fireEvent.update(screen.getByLabelText('Season'), '2')
     await fireEvent.update(screen.getByLabelText('Episode'), '3')
     await fireEvent.update(screen.getByLabelText('Search query'), '  title  ')

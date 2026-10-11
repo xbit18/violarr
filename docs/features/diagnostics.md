@@ -9,7 +9,7 @@ accetta le release.
 
 1. Apri **Diagnostica → Ricerca**, la vista predefinita.
 2. Scegli ricerca generica, film o serie TV e inserisci il testo.
-3. Apri **Parametri avanzati** per IMDb, TMDb (solo film), stagione/episodio
+3. Apri **Parametri avanzati** per IMDb/TMDb (film e TV), stagione/episodio
    (solo TV), categorie, limite e offset. Limite: 1–200; offset: 0–1000000. Le
    categorie sono accettate ma non filtrano le query attuali. La diagnostica
    conserva questo comportamento, senza ampliare le ricerche o disattivare i
@@ -50,25 +50,31 @@ alcun report.
 
 ### Esecuzioni delle strategie e provenienza
 
-Il report v2 elenca ogni esecuzione osservata con stato, durata e numero di
-candidati. Un'esecuzione parziale o non riuscita non dimostra l'assenza di
-release corrispondenti. Il motore attuale usa ancora un solo ramo di query
-esistente per finestra esaminata: il formato del report non aggiunge strategie e
-non amplia i risultati.
+Il report v2 elenca ogni strategia per ID esatto applicabile alla finestra
+esaminata. Una query SQL condivisa unisce i rami; la durata appartiene alla fase
+database. Le durate indipendenti dei rami sono **Non disponibile** (`null`), non
+zero né tempi inventati. Se la query condivisa fallisce, i conteggi dei rami
+restano indisponibili. Errori nella raccolta diagnostica non modificano i
+risultati.
 
 **Provenienza dei risultati** raggruppa le osservazioni tramite un'identità
 opaca SHA256 derivata dall'info-hash memorizzato. L'identità resta stabile tra
 ordinamenti e finestre, mentre gli ID delle singole occorrenze mantengono
-distinte le decisioni di filtro e paginazione delle righe duplicate. I conteggi
-includono le occorrenze ripetute, non solo le identità uniche. Gli
-identificatori delle strategie e le evidenze categoriali descrivono le fonti
-osservate, non l'accettazione a valle.
+distinte le decisioni di filtro e paginazione. I conteggi per ID esatto
+descrivono la finestra recuperata e deduplicata per hash, non tutte le
+corrispondenze nel database. Ogni strategia conta le proprie corrispondenze
+osservate nella finestra; le sovrapposizioni compaiono in più strategie. Il
+contributo univoco conta i candidati presenti solo in quella strategia nella
+finestra esaminata. Le evidenze sicure indicano IMDb/TMDB esatto e fonte
+torrent/file, non l'accettazione a valle.
 
-Contributo univoco, deduplicazione, rilevanza e inclusione a livello di identità
-mostrano **Non disponibile** (`null`) se non osservati esplicitamente. Il motore
-attuale non deduplica, non fonde risultati e non calcola la rilevanza di
-ricerca; il punteggio di elaborazione resta quello separato di preset/regole.
-Un'identità ripetuta non dimostra che sia avvenuta una deduplicazione.
+Per gli ID esatti, deduplicazione indica che SQL ha ridotto più corrispondenze
+di ramo allo stesso hash; `EXISTS` evita la moltiplicazione per file senza
+contarli. L'inclusione viene confermata solo dopo la validazione XML effettiva;
+motivi di filtro e ranking restano nei dettagli delle release. La rilevanza
+resta `null`: i punteggi sono di preset/regole, non misure di fiducia
+nell'identità. Ricerche per titolo e generiche mantengono conteggi delle
+occorrenze e dati di provenienza non disponibili come prima.
 
 ## Osservare le richieste dei client
 

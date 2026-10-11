@@ -21,6 +21,7 @@ STAGES = {"input", "database", "processing", "serialization", "search", "merge"}
 EVIDENCE = {
     "field": {"title", "imdb", "tmdb", "season", "episode"},
     "match_type": {"exact", "contains", "token", "browse"},
+    "source": {"torrent", "file"},
 }
 
 
@@ -102,6 +103,7 @@ class SearchCollector:
         self.identities = {}
         self.provenance_occurrences = set()
         self.results = {}
+        self.shared_strategies = {}
         self.report = {
             "report_version": 2,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -154,6 +156,9 @@ class SearchCollector:
 
     def fail(self):
         self.strategy_complete(status="failed")
+        for entry in self.shared_strategies.values():
+            if entry["status"] == "running":
+                entry["status"] = "failed"
         stage = self.report["stages"][self.stage]
         stage["status"] = "failed"
         stage["duration_ms"] += (perf_counter() - self.stage_started) * 1000
@@ -210,6 +215,87 @@ class SearchCollector:
             "metadata": safe_evidence(metadata),
         }
         self.report["strategies"].append(self.active_strategy)
+
+    def merged_begin(self, strategies):
+        """Record attempted branches of one shared SQL execution, without timers."""
+        limitation = "Exact branch timings are unavailable; database timing covers the shared SQL."
+        if limitation not in self.report["limitations"]:
+            self.report["limitations"].extend(
+                [
+                    limitation,
+                    "Exact branch counts cover fetched windows; unique contribution is exclusive membership.",
+                ]
+            )
+        self.active_strategy = None
+        self.report["strategy"] = strategies[0] if len(strategies) == 1 else "multi_strategy"
+        self.shared_strategies = {}
+        for identifier in strategies:
+            if len(self.report["strategies"]) >= MAX_STRATEGIES:
+                self.report["truncated"] = True
+                break
+            metadata = {
+                "field": "imdb" if "imdb" in identifier else "tmdb",
+                "match_type": "exact",
+                # File-backed branch origin is not necessarily identity source:
+                # files carry IMDb, while TMDB always belongs to the parent.
+                "source": "file" if identifier.startswith("tv_file_imdb_") else "torrent",
+            }
+            entry = {
+                "identifier": identifier,
+                "status": "running",
+                "duration_ms": None,
+                "candidates": None,
+                "unique_contribution": None,
+                "metadata": metadata,
+            }
+            self.report["strategies"].append(entry)
+            self.shared_strategies[identifier] = entry
+
+    def merged_window(self, rows, limit, offset, strategies, memberships, deduplicated):
+        """Contributions are exclusive memberships in this fetched window.
+
+        Branch totals, raw duplicate-file counts and independent timings are not
+        inferred from a single shared SQL execution.
+        """
+        self.active_strategy = None
+        self.report["windows"].append({"offset": offset, "limit": limit, "candidates": len(rows)})
+        self.report["counts"]["candidates"] += len(rows)
+        entries = self.shared_strategies
+        for identifier, entry in entries.items():
+            entry.update(
+                status="success",
+                candidates=sum(identifier in names for names in memberships),
+                unique_contribution=sum(names == (identifier,) for names in memberships),
+            )
+        if not self.detailed:
+            return
+        for index, row in enumerate(rows):
+            if len(self.results) >= MAX_RELEASES:
+                self.report["truncated"] = True
+                break
+            occurrence = f"{offset}:{index}"
+            result = DiagnosticResult.from_row(row)
+            self.results[occurrence] = result
+            for identifier in memberships[index]:
+                self.active_strategy = entries.get(identifier)
+                self.strategy_result(result, occurrence)
+                if identifier.startswith("tv_file_"):
+                    # Observed membership proves these predicates on the same
+                    # qualifying file row. Do not expose request values as row
+                    # metadata or infer episode evidence for season-only branches.
+                    fields = (
+                        ("season", "episode")
+                        if identifier.endswith("_season_episode")
+                        else ("season",)
+                    )
+                    for field in fields:
+                        self.strategy_result(
+                            result,
+                            occurrence,
+                            {"field": field, "match_type": "exact", "source": "file"},
+                        )
+            self.active_strategy = None
+            self.result_facts(result, deduplicated=deduplicated[index])
 
     def strategy_complete(self, *, status="success", candidates=None, unique_contribution=None):
         if status not in {"success", "partial", "failed"}:
@@ -403,6 +489,17 @@ class SearchCollector:
                 ):
                     raise ValueError("Unexpected Torznab identity order")
         self.report["counts"]["returned"] = self.report["counts"]["selected"]
+        # This fact is available only after actual serialization validation. It
+        # is separate from filtering/ranking scores, which are not ID relevance.
+        if self.detailed:
+            selected_identities = {
+                self.results[occurrence].identity
+                for occurrence in self.selected_ids
+                if occurrence in self.results
+            }
+            for identity, provenance in self.identities.items():
+                if provenance["deduplicated"] is not None:
+                    provenance["included"] = identity in selected_identities
         releases = {release["id"]: release for release in self.report["releases"]}
         for index, candidate_id in enumerate(self.selected_ids):
             release = releases.get(candidate_id)
@@ -497,6 +594,12 @@ class ObservationFacade:
 
     def window(self, rows, limit, offset):
         self._call("window", rows, limit, offset)
+
+    def merged_window(self, rows, limit, offset, strategies, memberships, deduplicated):
+        self._call("merged_window", rows, limit, offset, strategies, memberships, deduplicated)
+
+    def merged_begin(self, strategies):
+        self._call("merged_begin", strategies)
 
     def page(self, offset, indices):
         self._call("page", offset, indices)

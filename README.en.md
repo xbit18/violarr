@@ -30,6 +30,7 @@
 ## Features
 
 - Search movies, TV, and anime from Prowlarr.
+- Combine exact IMDb/TMDB matches for movies and TV, with same-file TV episode evidence for packs; known identity conflicts are excluded, missing metadata is allowed.
 - Configure everything from the WebUI in Italian or English.
 - Prefer Italian results or build custom rules.
 - Keep the database updated automatically.

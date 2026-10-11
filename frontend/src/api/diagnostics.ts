@@ -50,10 +50,10 @@ export interface Release {
 export interface StrategyExecution {
   identifier: string
   status: 'running' | 'success' | 'partial' | 'failed'
-  duration_ms: number
+  duration_ms: number | null
   candidates: number | null
   unique_contribution: number | null
-  metadata: { field?: string | null; match_type?: string | null }
+  metadata: { field?: string | null; match_type?: string | null; source?: string | null }
 }
 export interface Provenance {
   identity: string
@@ -167,10 +167,11 @@ function projectStrategies(strategies: StrategyExecution[]) {
   }))
 }
 function projectMetadata(value: unknown) {
-  const metadata = pick(value, ['field', 'match_type'])
+  const metadata = pick(value, ['field', 'match_type', 'source'])
   const allowed: Record<string, readonly unknown[]> = {
     field: [null, 'title', 'imdb', 'tmdb', 'season', 'episode'],
     match_type: [null, 'exact', 'contains', 'token', 'browse'],
+    source: [null, 'torrent', 'file'],
   }
   return Object.fromEntries(
     Object.entries(metadata).filter(([key, item]) => allowed[key]!.includes(item)),

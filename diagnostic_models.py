@@ -144,12 +144,13 @@ class RequestHistory(BaseModel):
 class MatchMetadata(BaseModel):
     field: Literal["title", "imdb", "tmdb", "season", "episode"] | None = None
     match_type: Literal["exact", "contains", "token", "browse"] | None = None
+    source: Literal["torrent", "file"] | None = None
 
 
 class StrategyExecution(BaseModel):
     identifier: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
     status: Literal["running", "success", "partial", "failed"]
-    duration_ms: float = Field(ge=0)
+    duration_ms: float | None = Field(ge=0)
     candidates: int | None = Field(default=None, ge=0)
     unique_contribution: int | None = Field(default=None, ge=0)
     metadata: MatchMetadata
