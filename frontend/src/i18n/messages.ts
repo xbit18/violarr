@@ -1,4 +1,5 @@
 export const italianMessages = {
+  'applicationUpdate.available': 'v{version} disponibile',
   'diagnostics.intro':
     'Esamina la ricerca locale e le richieste ricevute senza modificare filtri o risultati.',
   'diagnostics.search': 'Ricerca',
@@ -357,6 +358,7 @@ export type MessageKey = keyof typeof italianMessages
 export type Messages = Record<MessageKey, string>
 
 export const englishMessages: Messages = {
+  'applicationUpdate.available': 'v{version} available',
   'diagnostics.intro':
     'Inspect local searches and incoming requests without changing filters or results.',
   'diagnostics.search': 'Search',

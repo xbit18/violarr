@@ -22,7 +22,28 @@ Il servizio espone tre superfici HTTP sulla porta `8000`.
 | `POST` | `/webapi/prowlarr/indexer`  | Risultato di creazione o indexer esistente | `400`, `502`          |
 
 Durante la breve sostituzione del database, il middleware può restituire HTTP
-`503` con `Retry-After: 5` prima dell'handler normale di qualsiasi route.
+`503` con `Retry-After: 5` prima dell'handler normale, tranne la lettura della
+cache `GET /webapi/application-update` indipendente dal database.
+
+## `GET /webapi/application-update`
+
+Restituisce soltanto la cache in memoria, senza chiamare GitHub o PostgreSQL:
+
+```json
+{
+  "update_available": true,
+  "latest_version": "1.10.0",
+  "release_url": "https://github.com/xbit18/violarr/releases/tag/v1.10.0"
+}
+```
+
+Il risultato nascosto/non disponibile è `update_available: false` con entrambi
+gli altri campi null. Solo una release stabile più recente e un URL HTTPS esatto
+del repository, corrispondente al tag, producono un link. Il controllo avviene
+in background all'avvio e ogni ora; gli errori preservano l'ultima cache valida,
+potenzialmente obsoleta. Non aggiorna l'applicazione o gli snapshot. Come il
+resto della WebAPI, non ha autenticazione: usa una rete affidabile o un reverse
+proxy autenticato.
 
 ## Diagnostica
 

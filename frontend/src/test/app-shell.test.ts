@@ -3,11 +3,17 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppShell from '../components/AppShell.vue'
 import { LOCALE_STORAGE_KEY, useLocale } from '../i18n'
+import { api } from '../api/client'
 
 describe('mobile application shell', () => {
   beforeEach(() => {
     localStorage.clear()
     useLocale().setLocale('it')
+    vi.spyOn(api, 'applicationUpdate').mockResolvedValue({
+      update_available: true,
+      latest_version: '1.10.0',
+      release_url: 'https://github.com/xbit18/violarr/releases/tag/v1.10.0',
+    })
   })
   it('traps focus, closes on Escape, returns focus, and focuses content after navigation', async () => {
     vi.stubGlobal(
@@ -34,7 +40,12 @@ describe('mobile application shell', () => {
     expect(screen.getByRole('link', { name: 'Diagnostica' }).getAttribute('href')).toBe(
       '/diagnostics',
     )
-    const links = screen.getByRole('navigation').querySelectorAll('a')
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: 'v1.10.0 disponibile' })).toBeTruthy(),
+    )
+    const links = document.querySelectorAll<HTMLAnchorElement>('.sidebar a')
+    expect(links[links.length - 1].getAttribute('target')).toBe('_blank')
+    expect(document.querySelector('.sidebar-note')?.textContent).toBe(useLocale().t('app.subtitle'))
     expect(document.activeElement).toBe(links[0])
     menu.focus()
     await fireEvent.keyDown(document, { key: 'Tab' })

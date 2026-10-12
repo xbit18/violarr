@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from application_update import install_application_update
 from release_language import should_force_english
 from result_processor import process_results
 from search_diagnostics import ACTIVE_COLLECTOR, ObservationFacade, SearchCollector, record_strategy
@@ -28,6 +29,7 @@ SETTINGS_STORE = SettingsStore()
 app = FastAPI(version=APP_VERSION)
 app.state.settings_store = SETTINGS_STORE
 install_snapshot_updater(app, SETTINGS_STORE)
+install_application_update(app, APP_VERSION)
 app.state.search_monitor = SearchMonitor()
 app.add_middleware(SearchMonitoringMiddleware, monitor=app.state.search_monitor)
 

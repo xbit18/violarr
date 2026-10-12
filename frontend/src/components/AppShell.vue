@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { navigation } from '../composables/navigation'
 import { createThemeController } from '../composables/theme'
 import { useLocale, type Locale } from '../i18n'
+import ApplicationUpdateNotification from './ApplicationUpdateNotification.vue'
 
 const route = useRoute()
 const theme = createThemeController()
@@ -151,7 +152,10 @@ const links = [
           label === 'Prowlarr' ? label : locale.t(label)
         }}</RouterLink>
       </nav>
-      <p class="sidebar-note">{{ locale.t('app.subtitle') }}</p>
+      <div class="sidebar-footer">
+        <ApplicationUpdateNotification />
+        <p class="sidebar-note">{{ locale.t('app.subtitle') }}</p>
+      </div>
     </aside>
     <main id="main-content" ref="main" class="main" tabindex="-1"><RouterView /></main>
   </div>
