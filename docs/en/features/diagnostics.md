@@ -114,13 +114,20 @@ requests cannot be replayed.
 To save the entire current buffer, select **Export history** beside **Clear
 history**. Violarr fetches all currently recorded entries (up to 100), not just
 the inspected request. Review **History preview** and its privacy warning, then
-confirm with **Download JSON**. The local file `violarr-request-history-v1.json`
-contains export version `1`, a generation timestamp, and every entry's safe
-original/normalized parameters, strategy, stages, counts, timings, timestamp,
-HTTP status, errors and truncated/replayable flags. It does not include release
-sets or entries already discarded from memory. Export is disabled when history
-is empty or a history operation is pending. The same redaction and 4 MB limit
-described below apply; query terms may still be sensitive.
+select **Copy JSON** to copy it or **Download JSON** to save a file. The local
+file `violarr-request-history-v1.json` contains export version `1`, a generation
+timestamp, and every entry's safe original/normalized parameters, strategy,
+stages, counts, timings, timestamp, HTTP status, errors and truncated/replayable
+flags. It does not include release sets or entries already discarded from
+memory. Export is disabled when history is empty or a history operation is
+pending. The same redaction and 4 MB limit described below apply; query terms
+may still be sensitive.
+
+**Copy JSON** in **History preview** copies the exact prepared, formatted
+export, including its metadata, without downloading or fetching history again.
+It is not available in **Report preview**. Clipboard access depends on browser
+permissions and a secure context; if copying is unavailable or denied, use
+**Download JSON** in the preview instead.
 
 ## Share a report safely
 

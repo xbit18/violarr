@@ -686,6 +686,7 @@ describe('diagnostics', () => {
     await run()
     await fireEvent.click(screen.getByRole('button', { name: 'Export report' }))
     const preview = screen.getByRole('region', { name: 'Report preview' })
+    expect(within(preview).queryByRole('button', { name: 'Copy JSON' })).toBeNull()
     expect(
       within(preview).getByText(/Search terms and release titles may be sensitive/),
     ).toBeTruthy()
@@ -699,7 +700,194 @@ describe('diagnostics', () => {
     expect(revoke).toHaveBeenCalledWith('blob:report')
   })
 
+  it('copies the exact fresh full-buffer export after explicit privacy confirmation without downloading', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-12T12:00:00Z'))
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    mount()
+    await requests()
+    await fireEvent.click(screen.getByRole('button', { name: 'Inspect request 1' }))
+    expect(screen.queryByRole('button', { name: 'Copy history' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy JSON' })).toBeNull()
+    const button = screen.getByRole('button', { name: 'Export history' })
+    history = Array.from({ length: 100 }, (_, index) => ({
+      ...entry(),
+      id: index + 1,
+      original: {
+        ...entry().original,
+        q: 'Sensitive /Users/private token=secret',
+        apikey: 'secret',
+      },
+    }))
+    await fireEvent.click(button)
+    await flushPromises()
+    const preview = screen.getByRole('region', { name: 'History preview' })
+    const payload = preview.querySelector('pre')!.textContent!
+    expect(payload).toBe(exportHistory(history as unknown as MonitoredRequest[]))
+    expect(JSON.parse(payload).requests).toHaveLength(100)
+    expect(payload).toContain('[redacted]')
+    for (const forbidden of ['secret', '/Users/private', 'apikey'])
+      expect(payload).not.toContain(forbidden)
+    expect(
+      within(preview).getByText(/Search terms and release titles may be sensitive/),
+    ).toBeTruthy()
+    expect(writeText).not.toHaveBeenCalled()
+    const fetchCount = fetchMock.mock.calls.length
+    vi.setSystemTime(new Date('2026-10-12T12:01:00Z'))
+    await fireEvent.click(within(preview).getByRole('button', { name: 'Copy JSON' }))
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(payload)
+    expect(fetchMock.mock.calls).toHaveLength(fetchCount)
+    expect(screen.getByRole('status').textContent).toBe('History copied to clipboard.')
+    expect(click).not.toHaveBeenCalled()
+    expect(within(preview).getByRole('button', { name: 'Download JSON' })).toBeTruthy()
+    await fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Export history' }))
+    await flushPromises()
+    expect(screen.queryByText('History copied to clipboard.')).toBeNull()
+  })
+
+  it('announces Italian success and clears old feedback when a retry fails', async () => {
+    const writeText = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('denied'))
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    useLocale().setLocale('it')
+    mount()
+    await fireEvent.click(screen.getByRole('button', { name: 'Richieste' }))
+    await flushPromises()
+    expect(screen.queryByRole('button', { name: 'Copia cronologia' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Esporta cronologia' }))
+    await flushPromises()
+    await fireEvent.click(screen.getByRole('button', { name: 'Copia JSON' }))
+    await flushPromises()
+    expect(screen.getByRole('status').textContent).toBe('Cronologia copiata negli appunti.')
+    await fireEvent.click(screen.getByRole('button', { name: 'Copia JSON' }))
+    await flushPromises()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Impossibile copiare la cronologia. Usa Scarica JSON come alternativa.',
+    )
+    expect(writeText).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['missing', 'denied', 'italian'] as const)(
+    'handles %s clipboard with fixed localized feedback and export fallback',
+    async (mode) => {
+      if (mode === 'italian') useLocale().setLocale('it')
+      const writeText = vi.fn().mockRejectedValue(new Error('private browser exception'))
+      vi.stubGlobal('navigator', mode === 'missing' ? {} : { clipboard: { writeText } })
+      mount()
+      await fireEvent.click(
+        screen.getByRole('button', { name: mode === 'italian' ? 'Richieste' : 'Requests' }),
+      )
+      await flushPromises()
+      await fireEvent.click(
+        screen.getByRole('button', {
+          name: mode === 'italian' ? 'Esporta cronologia' : 'Export history',
+        }),
+      )
+      await flushPromises()
+      await fireEvent.click(
+        screen.getByRole('button', { name: mode === 'italian' ? 'Copia JSON' : 'Copy JSON' }),
+      )
+      await flushPromises()
+      expect(screen.getByRole('alert').textContent).toBe(
+        mode === 'italian'
+          ? 'Impossibile copiare la cronologia. Usa Scarica JSON come alternativa.'
+          : 'Could not copy history. Use Download JSON instead.',
+      )
+      expect(screen.queryByText(/private browser exception/)).toBeNull()
+      expect(
+        screen.getByRole('button', { name: mode === 'italian' ? 'Scarica JSON' : 'Download JSON' }),
+      ).toBeTruthy()
+    },
+  )
+
+  it.each(['empty', 'unavailable'])('disables export without copy for %s history', async (mode) => {
+    history = []
+    if (mode === 'unavailable') fetchMock.mockResolvedValue(json({ detail: 'Unavailable' }, 503))
+    mount()
+    await requests()
+    expect(
+      (screen.getByRole('button', { name: 'Export history' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Copy history' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy JSON' })).toBeNull()
+  })
+
+  it.each(['close', 'tab', 'replace', 'clear', 'unmount'] as const)(
+    'prevents duplicate writes and stale feedback after %s while copy is pending',
+    async (change) => {
+      let resolve!: () => void
+      let reject!: (cause: unknown) => void
+      const writeText = vi.fn(
+        () =>
+          new Promise<void>((r, j) => {
+            resolve = r
+            reject = j
+          }),
+      )
+      vi.stubGlobal('navigator', { clipboard: { writeText } })
+      const view = mount()
+      await requests()
+      await fireEvent.click(screen.getByRole('button', { name: 'Export history' }))
+      await flushPromises()
+      const copy = screen.getByRole('button', { name: 'Copy JSON' })
+      await fireEvent.click(copy)
+      await fireEvent.click(copy)
+      expect(writeText).toHaveBeenCalledOnce()
+      expect((copy as HTMLButtonElement).disabled).toBe(true)
+      if (change === 'unmount') view.unmount()
+      else if (change === 'tab')
+        await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+      else if (change === 'clear')
+        await fireEvent.click(screen.getByRole('button', { name: 'Clear history' }))
+      else if (change === 'replace') {
+        await fireEvent.click(screen.getByRole('button', { name: 'Export history' }))
+        await flushPromises()
+      } else await fireEvent.click(screen.getByRole('button', { name: 'Close preview' }))
+      if (change === 'replace') {
+        const replacementCopy = screen.getByRole('button', { name: 'Copy JSON' })
+        expect((replacementCopy as HTMLButtonElement).disabled).toBe(true)
+        await fireEvent.click(replacementCopy)
+        expect(writeText).toHaveBeenCalledOnce()
+      }
+      if (change === 'tab') reject(new Error('private failure'))
+      else resolve()
+      await flushPromises()
+      expect(screen.queryByText('History copied to clipboard.')).toBeNull()
+      expect(screen.queryByText('Could not copy history. Use Download JSON instead.')).toBeNull()
+    },
+  )
+
+  it('disables export preparation while fetching and ignores a late response after changing tabs', async () => {
+    mount()
+    await requests()
+    let resolve!: (response: Response) => void
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
+    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Export history' }))
+    expect(
+      (screen.getByRole('button', { name: 'Export history' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Copy JSON' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    resolve(json({ requests: [entry()] }))
+    await flushPromises()
+    expect(screen.queryByRole('region', { name: 'History preview' })).toBeNull()
+  })
+
   it('exports fresh full history metadata, not just the inspected entry, after privacy confirmation', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
     const create = vi.fn().mockReturnValue('blob:history')
     const revoke = vi.fn()
     vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: revoke })
@@ -719,10 +907,12 @@ describe('diagnostics', () => {
     await fireEvent.click(button)
     await flushPromises()
     const preview = screen.getByRole('region', { name: 'History preview' })
+    expect(within(preview).getByRole('button', { name: 'Copy JSON' })).toBeTruthy()
     expect(
       within(preview).getByText(/Search terms and release titles may be sensitive/),
     ).toBeTruthy()
-    const exported = JSON.parse(preview.querySelector('pre')!.textContent!)
+    const payload = preview.querySelector('pre')!.textContent!
+    const exported = JSON.parse(payload)
     expect(exported.export_version).toBe(1)
     expect(exported.kind).toBe('monitored_requests')
     expect(Number.isNaN(Date.parse(exported.generated_at))).toBe(false)
@@ -739,6 +929,11 @@ describe('diagnostics', () => {
     expect(JSON.parse(downloaded)).toEqual(exported)
     expect(click).toHaveBeenCalledOnce()
     expect(revoke).toHaveBeenCalledWith('blob:history')
+    expect(writeText).not.toHaveBeenCalled()
+    await fireEvent.click(within(preview).getByRole('button', { name: 'Copy JSON' }))
+    await flushPromises()
+    expect(downloaded).toBe(payload)
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(downloaded)
   })
 
   it('disables empty and pending history exports, reports fetch errors without stale downloads', async () => {
