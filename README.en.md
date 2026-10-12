@@ -27,6 +27,10 @@
 
 </div>
 
+<p align="center">
+  <img src="assets/readme-hero-en.png" alt="Violarr: smart search for italian content" width="100%">
+</p>
+
 ## Features
 
 - Search movies, TV, and anime from Prowlarr.
