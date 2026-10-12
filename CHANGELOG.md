@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.0](https://github.com/xbit18/violarr/compare/v1.1.5...v1.2.0) (2026-10-12)
+
+
+### Features
+
+* add copy action for diagnostic history JSON ([33b0aa8](https://github.com/xbit18/violarr/commit/33b0aa8105604d1c648221d5d4d6d4d4b96334ad))
+* add search diagnostics and request monitoring ([f2077b4](https://github.com/xbit18/violarr/commit/f2077b4b76661c8fea6b34924c6d061906af44b2))
+* expand search coverage with fuzzy matching and movie packs ([#56](https://github.com/xbit18/violarr/issues/56)) ([da986e1](https://github.com/xbit18/violarr/commit/da986e1438eae67cd7dd4d48a5474c91a99400fb))
+* improve database snapshot update controls ([#57](https://github.com/xbit18/violarr/issues/57)) ([8521825](https://github.com/xbit18/violarr/commit/85218259fa7bd4bdf572625b3c4ae17d34a9452f))
+* improve search coverage with multi-strategy matching ([#52](https://github.com/xbit18/violarr/issues/52)) ([d3b3b59](https://github.com/xbit18/violarr/commit/d3b3b5949047f8f90e01c1d03307c3fa4a9cfec3))
+* notify users when a new version is available ([#60](https://github.com/xbit18/violarr/issues/60)) ([a4e3d34](https://github.com/xbit18/violarr/commit/a4e3d3437eb84fa2590a0f9d5ed3a1f7fd0f9859))
+
 ## [1.1.5](https://github.com/xbit18/violarr/compare/v1.1.4...v1.1.5) (2026-10-09)
 
 
