@@ -1,4 +1,10 @@
 export type Preset = 'unfiltered' | 'italian_preferred' | 'italian_only' | 'custom'
+
+export interface ApplicationUpdate {
+  update_available: boolean
+  latest_version: string | null
+  release_url: string | null
+}
 export type RuleField = 'title' | 'provider' | 'size' | 'seeders'
 export type RuleOperator = 'contains' | 'not_contains' | 'equals' | 'gte' | 'lte'
 export type RuleAction = 'score' | 'exclude'

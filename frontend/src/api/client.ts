@@ -1,5 +1,6 @@
 import type {
   AppStatus,
+  ApplicationUpdate,
   IndexerResult,
   ProwlarrStatus,
   PublicSettings,
@@ -66,44 +67,59 @@ export async function requestJson<T>(
     timedOut = true
     controller.abort()
   }, timeoutMs)
-  let response: Response
   try {
-    response = await fetch(path, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...init?.headers },
-      signal: controller.signal,
-    })
+    let response: Response
+    try {
+      response = await fetch(path, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...init?.headers },
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        (error instanceof DOMException && error.name === 'AbortError')
+      )
+        throw error
+      throw new ApiError(t('error.unreachable'))
+    }
+    if (!response.ok) {
+      let detail: unknown
+      try {
+        const body = (await response.json()) as { detail?: unknown }
+        detail = body.detail
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+        detail = null
+      }
+
+      const objectDetail = structuredDetail(detail)
+      const serverMessage =
+        typeof detail === 'string' && detail.trim()
+          ? detail
+          : objectDetail?.message?.trim()
+            ? objectDetail.message
+            : null
+      const message = serverMessage ?? t('error.requestFailed', { status: response.status })
+
+      throw new ApiError(
+        message,
+        response.status,
+        serverMessage ? 'server' : 'client',
+        objectDetail,
+      )
+    }
+    return (await response.json()) as T
   } catch (error) {
     if (timedOut) throw new ApiError(t('error.timeout'))
     if (init?.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       throw new ApiError(t('error.canceled'))
     }
-    throw new ApiError(t('error.unreachable'))
+    throw error
   } finally {
     clearTimeout(timeout)
     init?.signal?.removeEventListener('abort', forwardAbort)
   }
-  if (!response.ok) {
-    let detail: unknown
-    try {
-      const body = (await response.json()) as { detail?: unknown }
-      detail = body.detail
-    } catch {
-      detail = null
-    }
-
-    const objectDetail = structuredDetail(detail)
-    const serverMessage =
-      typeof detail === 'string' && detail.trim()
-        ? detail
-        : objectDetail?.message?.trim()
-          ? objectDetail.message
-          : null
-    const message = serverMessage ?? t('error.requestFailed', { status: response.status })
-
-    throw new ApiError(message, response.status, serverMessage ? 'server' : 'client', objectDetail)
-  }
-  return response.json() as Promise<T>
 }
 
 export function apiErrorMessage(error: unknown, fallback: string) {
@@ -116,6 +132,8 @@ export function apiErrorMessage(error: unknown, fallback: string) {
 const json = (body: unknown): RequestInit => ({ method: 'PUT', body: JSON.stringify(body) })
 
 export const api = {
+  applicationUpdate: (signal?: AbortSignal) =>
+    requestJson<ApplicationUpdate>('/webapi/application-update', { signal }),
   status: (signal?: AbortSignal) => requestJson<AppStatus>('/webapi/status', { signal }),
   triggerDatabaseUpdate: (signal?: AbortSignal) =>
     requestJson<{ accepted: true }>('/webapi/database-update', { method: 'POST', signal }),

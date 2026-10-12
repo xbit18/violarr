@@ -70,9 +70,40 @@
   background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 .sidebar-note {
-  margin: auto 10px 4px;
+  margin: 0 10px 4px;
   color: var(--muted);
   font-size: 12px;
+}
+.sidebar-footer {
+  margin-top: auto;
+}
+.sidebar a.application-update {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--success);
+}
+.application-update svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.application-update span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.application-update svg:last-child {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+}
+.sidebar a.application-update:focus-visible {
+  outline: 2px solid var(--success);
+  outline-offset: 2px;
 }
 .main {
   margin-left: 238px;

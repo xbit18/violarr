@@ -33,6 +33,7 @@
 - Combina corrispondenze esatte IMDb/TMDB per film e TV, con evidenze di episodio nello stesso file per i pacchetti; i conflitti noti di identità sono esclusi, i metadati mancanti sono ammessi.
 - Recupera titoli separati da punteggiatura, refusi conservativi e film nei pacchetti insieme agli ID esatti; i metadati restituiti appartengono sempre al torrent. Consulta [copertura e limiti della ricerca](https://xbit18.github.io/violarr/reference/torznab-capabilities).
 - Configura tutto dalla WebUI in italiano o inglese.
+- Scopri nuove versioni stabili di Violarr dal link nella barra laterale, senza aggiornamenti automatici dell'applicazione.
 - Preferisci i risultati italiani o crea regole personalizzate.
 - Mantieni il database aggiornato automaticamente.
 - Esamina ricerche, filtri e richieste Torznab in **Diagnostica**, con riesecuzione e report JSON locali.

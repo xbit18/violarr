@@ -263,6 +263,40 @@ and filtered pages are not backfilled from later windows.
 This pipeline affects only ICVDB's XML response. It cannot guarantee downstream
 Radarr/Sonarr selection. Hard filters hide results from Prowlarr entirely.
 
+## Application release notification
+
+`application_update.py` owns independent startup/shutdown hooks and an immutable
+in-memory release cache, separate from the snapshot updater and settings. Startup
+schedules an immediate background check without waiting for GitHub; subsequent
+checks run one hour after completion. Bounded stdlib HTTP runs in one owned worker
+at a time: 10-second socket timeout and a bounded read of at most 256 KiB plus one
+byte to detect oversized payloads, independent of `Content-Length`. These bounds
+do not impose a hard total-response or OS DNS deadline. Shutdown signals the loop
+and waits for its in-flight worker instead of cancelling a thread and starting a
+replacement.
+
+Strict stable SemVer compares numeric major/minor/patch, ignores valid build
+metadata for ordering, and accepts an optional `v`. Invalid/unknown/prerelease
+installed versions and explicit dev/development/dirty/snapshot metadata suppress
+checks. GitHub draft/prerelease flags must both be boolean false; tags must be
+stable and `html_url` must equal the exact HTTPS `xbit18/violarr` release URL for
+that tag. Failed, oversized, malformed, timed-out or rate-limited checks preserve
+only the last valid cache; it may become stale. Nothing installs or restarts.
+
+`GET /webapi/application-update` reads only that cache, including during snapshot
+maintenance via a narrow outer middleware. It returns `update_available` and
+nullable `latest_version`/`release_url`; hidden/unavailable state has false/nulls.
+It remains unauthenticated under the existing trusted-network/reverse-proxy
+boundary and has no database/settings dependency. The sidebar polls this local
+endpoint on mount and hourly after completion, with one 15-second early retry if
+initially hidden. Requests are sequential, time-bounded and aborted on unmount;
+quiet refresh failures retain the last validated UI result.
+
+`version.py` reads adjacent `VERSION`, packaged from the checked-out release tag
+in official Docker images. A custom build carrying that same stable value cannot
+be distinguished from an official release using VERSION alone; there is no
+comprehensive branch/provenance detection.
+
 ## Database update controls
 
 `POST /webapi/database-update` reserves the existing updater lock before returning
@@ -270,7 +304,8 @@ Radarr/Sonarr selection. Hard filters hide results from Prowlarr entirely.
 the automatic-enabled setting and shares discovery, digest/dump validation,
 candidate restore/validation, switch and rollback. `GET /webapi/status` adds safe
 `updater.phase` progress and terminal outcomes. Maintenance still returns `503`
-for every route; sequential WebUI status polling tolerates it without reloading settings.
+for DB-dependent routes; the application-release cache read bypasses maintenance.
+Sequential WebUI status polling tolerates maintenance without reloading settings.
 
 Idle interval changes recalculate the deadline from reconfiguration time; enabling
 allows a prompt check and disabling clears it. Active configuration changes neither

@@ -14,6 +14,24 @@ Apri `http://HOST:8000/` per controllare Violarr e modificarne le impostazioni.
   anteprima privacy.
 - **Avanzate** è una vista in sola lettura e non richiede azioni.
 
+## Nuove versioni di Violarr
+
+Quando è confermata una versione stabile più recente, la barra laterale mostra
+**Versione {version} disponibile** con un link alla release GitHub esatta,
+aperta in una nuova scheda. Non scarica, installa o riavvia nulla; è
+indipendente dagli aggiornamenti del database ICVDB.
+
+Il server controlla GitHub in background all'avvio e poi ogni ora. La WebUI
+legge solo la cache locale all'apertura e ogni ora, con un solo tentativo
+anticipato dopo 15 secondi se il primo controllo non mostra aggiornamenti.
+Errori di rete e limiti GitHub restano silenziosi: l'ultimo risultato valido può
+essere obsoleto. Prima di un risultato valido il link è nascosto.
+
+Le versioni installate non valide, prerelease o esplicitamente di sviluppo non
+mostrano notifiche. La versione del file `VERSION` identifica le immagini
+ufficiali costruite dal tag di release, ma una build personalizzata con la
+stessa versione stabile non è distinguibile automaticamente.
+
 ## Salvare e verificare
 
 - Le impostazioni persistenti vengono salvate solo con il relativo pulsante

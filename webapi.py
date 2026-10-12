@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 
+from application_update import HIDDEN
 from diagnostic_models import (
     MonitoringInput,
     MonitoringStatus,
@@ -179,6 +180,11 @@ def _live_prowlarr_status(request: Request) -> dict[str, Any]:
 def create_webapi_router() -> APIRouter:
     router = APIRouter(prefix="/webapi", tags=["webapi"], route_class=_SafeDiagnosticsRoute)
     prowlarr_cache = _ProwlarrStateCache()
+
+    @router.get("/application-update")
+    async def application_update(request: Request):
+        checker = getattr(request.app.state, "application_update", None)
+        return (checker.snapshot() if checker is not None else HIDDEN).public()
 
     @router.post("/diagnostics/search", response_model=SearchReport)
     def diagnostic_search(request: Request, parameters: SearchInput):

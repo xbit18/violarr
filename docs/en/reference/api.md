@@ -22,7 +22,27 @@ The service exposes three HTTP surfaces on port `8000`.
 | `POST` | `/webapi/prowlarr/indexer`  | Creation or existing-indexer result           | `400`, `502`           |
 
 During the brief snapshot database switch, middleware can return HTTP `503` with
-`Retry-After: 5` for any route before its normal handler runs.
+`Retry-After: 5` before normal handlers run, except the DB-independent cache
+read `GET /webapi/application-update`.
+
+## `GET /webapi/application-update`
+
+Returns only the in-memory cache, without contacting GitHub or PostgreSQL:
+
+```json
+{
+  "update_available": true,
+  "latest_version": "1.10.0",
+  "release_url": "https://github.com/xbit18/violarr/releases/tag/v1.10.0"
+}
+```
+
+Hidden/unavailable state is `update_available: false` with both other fields
+null. Only a newer stable release and an exact HTTPS repository release URL
+matching its tag produce a link. Checks run in the background at startup and
+hourly; failures preserve the last valid cache, which may be stale. This does
+not update the application or snapshots. Like the rest of the WebAPI, it has no
+authentication: use a trusted network or an authenticated reverse proxy.
 
 ## Diagnostics
 

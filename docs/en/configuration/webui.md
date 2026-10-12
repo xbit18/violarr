@@ -14,6 +14,24 @@ Open `http://HOST:8000/` to check Violarr and change its settings.
   privacy preview.
 - **Advanced** is read-only and normally requires no action.
 
+## New Violarr releases
+
+When a newer stable version is confirmed, the sidebar shows **Version {version}
+available**, linking to the exact GitHub release in a new tab. It does not
+download, install, or restart anything and is independent of ICVDB snapshot
+updates.
+
+The server checks GitHub in the background at startup and hourly thereafter. The
+WebUI reads only the local cache on mount and hourly, with one early retry after
+15 seconds if the initial request shows no update. Network failures and GitHub
+rate limits stay silent: the last valid result may be stale. The link is hidden
+before a valid result.
+
+Invalid, prerelease, and explicitly development installed versions do not show
+notifications. Adjacent `VERSION` identifies official images built from release
+tags, but a custom build retaining the same stable version cannot be
+distinguished automatically.
+
 ## Save and verify
 
 - Persistent settings save only when you select their **Save** button.
