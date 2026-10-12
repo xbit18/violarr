@@ -1,0 +1,169 @@
+# Diagnosticare una release mancante
+
+**Diagnostica** nella WebUI mostra cosa succede all'interno di Violarr:
+parametri, ricerca nello snapshot locale, filtri e ranking, e generazione della
+risposta Torznab. Non cambia la ricerca e non verifica se un client a valle
+accetta le release.
+
+## Eseguire una ricerca
+
+1. Apri **Diagnostica → Ricerca**, la vista predefinita.
+2. Scegli ricerca generica, film o serie TV e inserisci il testo.
+3. Apri **Parametri avanzati** per IMDb/TMDb (film e TV), stagione/episodio
+   (solo TV), categorie, limite e offset. Limite: 1–200; offset: 0–1000000. Le
+   categorie sono accettate ma non filtrano le query attuali. La diagnostica
+   conserva questo comportamento, senza ampliare le ricerche o disattivare i
+   filtri.
+4. Premi **Esegui diagnostica** e controlla gli stati delle fasi. Le fasi
+   opzionali di ricerca/fusione compaiono solo se osservate; restano le quattro
+   fasi esistenti.
+5. Esamina candidati, motivo di esclusione, punteggio/indici delle regole e
+   correzione dei sottotitoli. In **Parametri, impostazioni e finestre** puoi
+   confrontare input originale e normalizzato, preset/regole effettive e
+   finestre.
+
+Gli indici delle regole partono da zero e corrispondono alle regole nelle
+impostazioni del report. La lingua XML di una release restituita è distinta
+dall'effetto della correzione dei sottotitoli durante l'elaborazione.
+
+## Interpretare il risultato
+
+| Osservazione                             | Cosa significa                                                                                                       |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Nessun candidato                         | Nessuna release recuperata dalle finestre esaminate dello snapshot locale, non prova di assenza dall'intero database |
+| Esclusa dai filtri                       | Il preset o una regola ha escluso il candidato; controlla motivo e impostazioni effettive                            |
+| Fuori dalla pagina finale                | Il candidato è stato mantenuto, ma non selezionato per questa pagina                                                 |
+| Selezionata, restituzione non confermata | La selezione per XML non prova che serializzazione e validazione siano riuscite                                      |
+| Restituita in XML validato               | Violarr ha generato la release nell'output; l'accettazione di Prowlarr/Sonarr/Radarr resta da verificare             |
+| Fase non riuscita / non eseguita         | La pipeline è parziale; consulta l'errore senza interpretare HTTP 200 come successo                                  |
+
+I conteggi non sono totali dell'intero database. I preset elaborati usano
+finestre di 1000 righe, ranking locale e pagine senza riempimento da finestre
+successive. Una release non esaminata può esistere altrove. Violarr usa uno
+**snapshot ICVDB locale**, che può differire da contenuti più recenti o percorsi
+di ricerca live dell'addon Stremio. Non effettua scraping né confronti live con
+Stremio.
+
+Se il database non è disponibile o è in sostituzione, attendi e riprova. Un
+errore di fase mantiene solo i dati osservati; un errore HTTP può non produrre
+alcun report.
+
+### Esecuzioni delle strategie e provenienza
+
+Il report v2 elenca ogni strategia film/TV per ID, titolo, fuzzy o pacchetto
+applicabile alla finestra esaminata. Una query SQL condivisa unisce i rami; la
+durata appartiene alla fase database. Le durate indipendenti dei rami sono **Non
+disponibile** (`null`), non zero né tempi inventati. Se la query condivisa
+fallisce, i conteggi dei rami restano indisponibili. Errori nella raccolta
+diagnostica non modificano i risultati.
+
+**Provenienza dei risultati** raggruppa le osservazioni tramite un'identità
+opaca SHA256 derivata dall'info-hash memorizzato. L'identità resta stabile tra
+ordinamenti e finestre, mentre gli ID delle singole occorrenze mantengono
+distinte le decisioni di filtro e paginazione. I conteggi per ID esatto
+descrivono la finestra recuperata e deduplicata per hash, non tutte le
+corrispondenze nel database. Ogni strategia conta le proprie corrispondenze
+osservate nella finestra; le sovrapposizioni compaiono in più strategie. Il
+contributo univoco conta i candidati presenti solo in quella strategia nella
+finestra esaminata. Le evidenze sicure indicano IMDb/TMDB esatto e fonte
+torrent/file/pack_file, oppure abbinamenti sul titolo, non l'accettazione a
+valle.
+
+Per gli ID esatti, deduplicazione indica che SQL ha ridotto più corrispondenze
+di ramo allo stesso hash; `EXISTS` evita la moltiplicazione per file senza
+contarli. L'inclusione viene confermata solo dopo la validazione XML effettiva;
+motivi di filtro e ranking restano nei dettagli delle release. La rilevanza
+resta `null`: i punteggi sono di preset/regole, non misure di fiducia
+nell'identità. Le ricerche generiche mantengono conteggi delle occorrenze e dati
+di provenienza non disponibili come prima.
+
+I candidati film/TV usano quattro livelli: ID nel torrent, evidenza esatta nei
+file o nei film del pacchetto, titolo validato, poi fuzzy. Un TMDB qualificato
+tramite file resta nel secondo livello, ma la fonte dell'identità rimane
+`torrent`. Prevale la corrispondenza più forte; dentro ogni livello i seeder
+sono decrescenti (NULL in fondo), poi l'hash crescente. La similarità non ordina
+dentro un livello. Preset e regole restano locali alla finestra. Un abbinamento
+nel pacchetto non sostituisce i metadati del torrent; identificatori e percorsi
+dei figli non vengono esportati. Ogni fonte fuzzy conserva fino a 2000 torrent
+distinti idonei per confidenza del titolo, poi seeder e chiavi deterministiche;
+il superamento del limite non elimina l'intero insieme. I controlli e la scelta
+della migliore evidenza del file precedono la selezione. La confidenza riguarda
+solo il sottoinsieme conservato, non l'ordine finale dei livelli. Termini brevi
+o generici possono non usare il fuzzy. Un conteggio fuzzy nullo non prova
+l'assenza di abbinamenti approssimativi. Consulta i
+[limiti di copertura](../reference/torznab-capabilities).
+
+Quando osservato, `fuzzy_pool` nelle strategie del JSON di report e cronologia
+contiene `found` (torrent distinti idonei prima del limite), `retained` (dopo il
+limite), `omitted` (la differenza) e `truncated` (differenza positiva).
+Abbinamenti non validi non sono omissioni. Questi totali provengono dalla stessa
+query, precedono la paginazione e restano disponibili per pagine vuote; non
+vanno sommati tra finestre ripetute. Sono separati dai conteggi della finestra e
+dal troncamento del report per privacy o limiti dei dettagli. Valori
+assenti/null indicano dati non disponibili, non zero. Non si aggiungono
+confidenza, hash originali, percorsi dei figli o tempi indipendenti dei rami.
+
+## Osservare le richieste dei client
+
+1. Apri **Richieste** e abilita **Monitora le ricerche in ingresso**.
+2. Avvia una ricerca dal tuo client attraverso Prowlarr.
+3. Premi **Aggiorna**, oppure attendi l'aggiornamento ogni cinque secondi mentre
+   questa vista è aperta.
+4. Premi **Esamina richiesta** per vedere parametri originali/normalizzati,
+   strategia, conteggi, durata, stato HTTP, fasi ed errori.
+5. Premi **Riesegui richiesta** per una **nuova ricerca diagnostica** con i
+   parametri originali. Database e impostazioni attuali possono differire dallo
+   stato storico. La riesecuzione non viene aggiunta alla cronologia.
+
+Il monitoraggio è disabilitato per impostazione predefinita. Conserva al massimo
+100 richieste Torznab `/api` recenti in memoria, non i set di release; le più
+vecchie vengono eliminate. Disabilitarlo ferma le nuove registrazioni ma
+conserva la cronologia; **Svuota cronologia** la elimina. Riavviare Violarr
+azzera stato e cronologia. Richieste oscurate, troncate o non valide non sono
+rieseguibili.
+
+Per salvare l'intero buffer attuale, premi **Esporta cronologia** accanto a
+**Svuota cronologia**. Violarr recupera tutte le richieste registrate in quel
+momento (fino a 100), non solo quella esaminata. Leggi **Anteprima cronologia**
+e l'avviso sulla privacy, poi premi **Copia JSON** per copiarla o **Scarica
+JSON** per salvare un file. Il file locale `violarr-request-history-v1.json`
+contiene versione di esportazione `1`, data e ora di generazione e, per ogni
+richiesta, parametri originali/normalizzati sanificati, strategia, fasi,
+conteggi, tempi, data e ora, stato HTTP, errori e indicatori di
+troncamento/riesecuzione. Non include set di release o richieste già eliminate
+dalla memoria. L'esportazione è disabilitata con cronologia vuota o
+un'operazione sulla cronologia in corso. Si applicano l'oscuramento e il limite
+di 4 MB descritti sotto; i termini di ricerca possono comunque essere sensibili.
+
+**Copia JSON** in **Anteprima cronologia** copia l'esatto JSON formattato già
+preparato, inclusi i metadati, senza scaricare un file o recuperare di nuovo la
+cronologia. Non è disponibile in **Anteprima report**. L'accesso agli appunti
+dipende dai permessi del browser e da un contesto sicuro; se non è disponibile o
+viene negato, usa **Scarica JSON** nell'anteprima.
+
+## Condividere un report in sicurezza
+
+1. Dopo una ricerca, premi **Esporta report**.
+2. Leggi **Anteprima report**: è il JSON che verrà scaricato, con versione
+   report `2`, versioni applicazione/snapshot, parametri sanificati,
+   impostazioni, fasi, finestre, conteggi, esecuzioni delle strategie,
+   provenienza, dettagli dei candidati ed errori sicuri. Il browser permette
+   anche di esportare report precedenti v1.
+3. Premi **Scarica JSON**, poi rimuovi eventuali dati privati prima di allegarlo
+   a una segnalazione. Il download è locale e non invia dati a servizi esterni.
+
+L'esportazione esclude credenziali, header, magnet completi, SQL e
+configurazione interna, limita dettagli e testo e rifiuta report oltre 4 MB.
+L'oscuramento strutturale **non rende anonimi** titoli, ricerche o valori delle
+regole. Il report può essere parziale se sono segnalati errori o troncamenti;
+senza report il pulsante di esportazione è disabilitato.
+
+::: warning Rete affidabile e privacy
+
+WebUI, WebAPI e Torznab non hanno autenticazione. Chi può raggiungere Violarr
+può eseguire diagnosi, abilitare il monitoraggio e leggere o cancellare la
+cronologia. Esponi la porta 8000 solo su una rete affidabile o dietro un proxy
+autenticato. Disabilita il monitoraggio e svuota la cronologia quando hai
+terminato.
+
+:::

@@ -14,8 +14,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from application_update import install_application_update
 from release_language import should_force_english
 from result_processor import process_results
+from search_diagnostics import ACTIVE_COLLECTOR, ObservationFacade, SearchCollector, record_strategy
+from search_monitor import SearchMonitor, SearchMonitoringMiddleware
+from search_strategies import CandidateRows, query_coverage
 from settings import SettingsStore
 from snapshot_updater import install_snapshot_updater
 from version import APP_VERSION
@@ -25,6 +29,9 @@ SETTINGS_STORE = SettingsStore()
 app = FastAPI(version=APP_VERSION)
 app.state.settings_store = SETTINGS_STORE
 install_snapshot_updater(app, SETTINGS_STORE)
+install_application_update(app, APP_VERSION)
+app.state.search_monitor = SearchMonitor()
+app.add_middleware(SearchMonitoringMiddleware, monitor=app.state.search_monitor)
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "host.docker.internal"),
@@ -172,6 +179,7 @@ def query_generic(
     with get_conn() as conn:
         with conn.cursor() as cur:
             if not q:
+                record_strategy("generic_browse")
                 cur.execute(
                     """
                     SELECT
@@ -195,6 +203,7 @@ def query_generic(
                 )
 
             else:
+                record_strategy("generic_title")
                 cur.execute(
                     """
                     SELECT
@@ -228,87 +237,10 @@ def query_movie(
     limit: int,
     offset: int,
 ):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            if imdb_id:
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type = 'movie'
-                      AND imdb_id = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        limit,
-                        offset,
-                    ),
-                )
-
-            elif tmdb_id is not None:
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type = 'movie'
-                      AND tmdb_id = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        tmdb_id,
-                        limit,
-                        offset,
-                    ),
-                )
-
-            elif q:
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type = 'movie'
-                      AND title ILIKE %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        f"%{q}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-            else:
-                return []
-
-            return cur.fetchall()
+    if q or imdb_id is not None or tmdb_id is not None:
+        return query_coverage(get_conn, "movie", imdb_id, tmdb_id, q, None, None, limit, offset)
+    record_strategy("movie_empty")
+    return []
 
 
 def query_tv(
@@ -316,199 +248,14 @@ def query_tv(
     q: str | None,
     season: int | None,
     episode: int | None,
+    tmdb_id: int | None,
     limit: int,
     offset: int,
 ):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            #
-            # 1. Episodio preciso:
-            #
-            # imdbid + season + episode
-            #
-            if imdb_id is not None and season is not None and episode is not None:
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND imdb_id = %s
-                      AND imdb_season = %s
-                      AND imdb_episode = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        season,
-                        episode,
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 2. Ricerca stagione tramite IMDb:
-            #
-            # imdbid + season
-            #
-            if imdb_id is not None and season is not None:
-                season_sxx = f"S{season:02d}"
-                season_word = f"Season {season}"
-
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND imdb_id = %s
-                      AND (
-                            imdb_season = %s
-                            OR (
-                                imdb_season IS NULL
-                                AND (
-                                    title ILIKE %s
-                                    OR title ILIKE %s
-                                )
-                            )
-                      )
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        season,
-                        f"%{season_sxx}%",
-                        f"%{season_word}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 3. Ricerca per titolo + stagione:
-            #
-            # q + season
-            #
-            if q is not None and season is not None:
-                season_sxx = f"S{season:02d}"
-                season_word = f"Season {season}"
-
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND title ILIKE %s
-                      AND (
-                            imdb_season = %s
-                            OR title ILIKE %s
-                            OR title ILIKE %s
-                      )
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        f"%{q}%",
-                        season,
-                        f"%{season_sxx}%",
-                        f"%{season_word}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 4. Ricerca tramite IMDb senza stagione
-            #
-            if imdb_id is not None:
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND imdb_id = %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        imdb_id,
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            #
-            # 5. Ricerca generica per titolo
-            #
-            if q:
-                cur.execute(
-                    """
-                    SELECT
-                        title,
-                        size,
-                        seeders,
-                        provider,
-                        upload_date,
-                        info_hash,
-                        type
-                    FROM torrents
-                    WHERE type IN ('series', 'anime')
-                      AND title ILIKE %s
-                    ORDER BY seeders DESC NULLS LAST
-                    LIMIT %s
-                    OFFSET %s
-                    """,
-                    (
-                        f"%{q}%",
-                        limit,
-                        offset,
-                    ),
-                )
-
-                return cur.fetchall()
-
-            return []
+    if q or imdb_id is not None or tmdb_id is not None:
+        return query_coverage(get_conn, "tv", imdb_id, tmdb_id, q, season, episode, limit, offset)
+    record_strategy("tv_empty")
+    return []
 
 
 def make_caps():
@@ -550,7 +297,7 @@ def make_caps():
     )
     tv_search.set(
         "supportedParams",
-        "q,season,ep,imdbid",
+        "q,season,ep,imdbid,tmdbid",
     )
 
     movie_search = SubElement(
@@ -800,10 +547,33 @@ def make_rss(rows, *, subtitle_language_correction=False):
     )
 
 
-def query_processed(query, query_args, limit, offset):
+def observe_window(collector, rows, limit, offset):
+    if isinstance(rows, CandidateRows):
+        collector.merged_window(
+            rows, limit, offset, rows.strategies, rows.memberships, rows.deduplicated
+        )
+    else:
+        collector.window(rows, limit, offset)
+
+
+def query_processed(query, query_args, limit, offset, collector=None):
     processing = SETTINGS_STORE.load()["result_processing"]
+    if collector is not None:
+        collector.processing_settings(processing)
     if processing["preset"] == "unfiltered":
-        return query(*query_args, limit, offset)
+        if collector is None:
+            return query(*query_args, limit, offset)
+        collector.begin("database")
+        rows = query(*query_args, limit, offset)
+        observe_window(collector, rows, limit, offset)
+        collector.complete()
+        collector.begin("processing")
+        observer = collector.observer(offset, processing["subtitle_language_correction"])
+        for index, row in enumerate(rows):
+            observer(index, row, None, 0, [])
+        collector.page(offset, list(range(len(rows))))
+        collector.complete()
+        return rows
 
     # Rank within fixed, non-overlapping database windows. This keeps memory
     # bounded, supports arbitrary offsets, and fetches both windows when a page
@@ -817,21 +587,100 @@ def query_processed(query, query_args, limit, offset):
         last_window + RESULT_CANDIDATE_WINDOW,
         RESULT_CANDIDATE_WINDOW,
     ):
+        if collector is not None:
+            collector.begin("database")
         rows = query(*query_args, RESULT_CANDIDATE_WINDOW, window_offset)
+        observer = None
+        if collector is not None:
+            observe_window(collector, rows, RESULT_CANDIDATE_WINDOW, window_offset)
+            collector.complete()
+            collector.begin("processing")
+            observer = collector.observer(window_offset, processing["subtitle_language_correction"])
         processed = process_results(
             rows,
             processing["preset"],
             processing["custom_rules"],
             subtitle_language_correction=processing["subtitle_language_correction"],
+            observer=observer,
         )
         local_start = max(offset - window_offset, 0)
         local_end = min(request_end - window_offset, RESULT_CANDIDATE_WINDOW)
         page.extend(processed[local_start:local_end])
+        if collector is not None:
+            collector.page(window_offset, observer.order[local_start:local_end])
+            collector.complete()
     return page
+
+
+def execute_search(
+    *,
+    t="search",
+    q=None,
+    imdbid=None,
+    tmdbid=None,
+    season=None,
+    ep=None,
+    cat=None,
+    limit=100,
+    offset=0,
+    collector=None,
+):
+    if collector is not None and not isinstance(collector, ObservationFacade):
+        collector = ObservationFacade(collector)
+    token = ACTIVE_COLLECTOR.set(collector)
+    try:
+        imdb_id = normalize_imdb(imdbid)
+        if collector is not None:
+            collector.begin("input")
+            original = dict(
+                t=t,
+                q=q,
+                imdbid=imdbid,
+                tmdbid=tmdbid,
+                season=season,
+                ep=ep,
+                cat=cat,
+                limit=limit,
+                offset=offset,
+            )
+            collector.inputs(original, {**original, "imdbid": imdb_id})
+        subtitle_language_correction = SETTINGS_STORE.load()["result_processing"][
+            "subtitle_language_correction"
+        ]
+        if collector is not None:
+            collector.serialization_settings(subtitle_language_correction)
+            collector.complete()
+        if t == "search":
+            query, args = query_generic, (q,)
+        elif t == "movie":
+            query, args = query_movie, (imdb_id, tmdbid, q)
+        elif t == "tvsearch":
+            query, args = query_tv, (imdb_id, q, season, ep, tmdbid)
+        else:
+            return make_rss([])
+        rows = query_processed(query, args, limit, offset, collector)
+        if collector is not None:
+            collector.begin("serialization")
+        xml = make_rss(rows, subtitle_language_correction=subtitle_language_correction)
+        if collector is not None:
+            if collector.serialized(xml):
+                collector.complete()
+        return xml
+    except Exception:
+        if collector is not None:
+            collector.fail()
+        raise
+    finally:
+        try:
+            if collector is not None:
+                collector.finish()
+        finally:
+            ACTIVE_COLLECTOR.reset(token)
 
 
 @app.get("/api")
 def torznab(
+    request: Request = None,
     t: str = Query("search"),
     q: str | None = None,
     imdbid: str | None = None,
@@ -857,54 +706,40 @@ def torznab(
             media_type="application/xml",
         )
 
-    imdb_id = normalize_imdb(imdbid)
-    subtitle_language_correction = SETTINGS_STORE.load()["result_processing"][
-        "subtitle_language_correction"
-    ]
-
-    if t == "search":
-        rows = query_processed(
-            query_generic,
-            (q,),
-            limit,
-            offset,
-        )
-
-        return Response(
-            content=make_rss(rows, subtitle_language_correction=subtitle_language_correction),
-            media_type="application/xml",
-        )
-
-    if t == "movie":
-        rows = query_processed(
-            query_movie,
-            (imdb_id, tmdbid, q),
-            limit,
-            offset,
-        )
-
-        return Response(
-            content=make_rss(rows, subtitle_language_correction=subtitle_language_correction),
-            media_type="application/xml",
-        )
-
-    if t == "tvsearch":
-        rows = query_processed(
-            query_tv,
-            (imdb_id, q, season, ep),
-            limit,
-            offset,
-        )
-
-        return Response(
-            content=make_rss(rows, subtitle_language_correction=subtitle_language_correction),
-            media_type="application/xml",
-        )
-
     return Response(
-        content=make_rss([]),
+        content=execute_search(
+            t=t,
+            q=q,
+            imdbid=imdbid,
+            tmdbid=tmdbid,
+            season=season,
+            ep=ep,
+            cat=cat,
+            limit=limit,
+            offset=offset,
+            collector=getattr(request.state, "search_collector", None)
+            if request is not None
+            else None,
+        ),
         media_type="application/xml",
     )
 
 
+def diagnostic_search(parameters):
+    collector = SearchCollector()
+    snapshot = None
+    try:
+        snapshot = app.state.snapshot_updater.status().get("installed_version")
+    except Exception:
+        pass
+    collector.versions(APP_VERSION, snapshot)
+    try:
+        execute_search(**parameters, collector=collector)
+    except Exception:
+        # The report already records a safe partial-stage error; never expose exc.
+        pass
+    return collector.snapshot()
+
+
+app.state.diagnostic_search = diagnostic_search
 install_frontend(app)

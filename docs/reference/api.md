@@ -22,7 +22,87 @@ Il servizio espone tre superfici HTTP sulla porta `8000`.
 | `POST` | `/webapi/prowlarr/indexer`  | Risultato di creazione o indexer esistente | `400`, `502`          |
 
 Durante la breve sostituzione del database, il middleware può restituire HTTP
-`503` con `Retry-After: 5` prima dell'handler normale di qualsiasi route.
+`503` con `Retry-After: 5` prima dell'handler normale, tranne la lettura della
+cache `GET /webapi/application-update` indipendente dal database.
+
+## `GET /webapi/application-update`
+
+Restituisce soltanto la cache in memoria, senza chiamare GitHub o PostgreSQL:
+
+```json
+{
+  "update_available": true,
+  "latest_version": "1.10.0",
+  "release_url": "https://github.com/xbit18/violarr/releases/tag/v1.10.0"
+}
+```
+
+Il risultato nascosto/non disponibile è `update_available: false` con entrambi
+gli altri campi null. Solo una release stabile più recente e un URL HTTPS esatto
+del repository, corrispondente al tag, producono un link. Il controllo avviene
+in background all'avvio e ogni ora; gli errori preservano l'ultima cache valida,
+potenzialmente obsoleta. Non aggiorna l'applicazione o gli snapshot. Come il
+resto della WebAPI, non ha autenticazione: usa una rete affidabile o un reverse
+proxy autenticato.
+
+## Diagnostica
+
+| Metodo           | Percorso                         | Contratto                                                        |
+| ---------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `POST`           | `/webapi/diagnostics/search`     | Report v2; le fasi possono fallire anche con HTTP `200`          |
+| `GET` / `PUT`    | `/webapi/diagnostics/monitoring` | `{enabled,capacity,count}`; PUT accetta solo `{enabled:boolean}` |
+| `GET` / `DELETE` | `/webapi/diagnostics/requests`   | `{requests:[...]}`; DELETE svuota la cronologia                  |
+
+La ricerca accetta solo `t` (`search`, `movie`, `tvsearch`), `q`, `imdbid`,
+`tmdbid`, `season`, `ep`, `cat`, `limit` e `offset`. Stringhe: massimo 512
+caratteri; TMDb/stagione/episodio: interi ±1000000000 o null; limite: 1–200
+(predefinito 100); offset: 0–1000000 (predefinito 0). Campi sconosciuti, tipi
+errati o valori fuori limite restituiscono `422` con dettaglio sicuro
+`{code:invalid_parameters,message:Invalid diagnostic parameters}`.
+
+Il report include versioni, timestamp, parametri originali/normalizzati,
+strategia, fasi input/database/processing/serialization con stato/durata,
+conteggi candidati, esclusi, mantenuti, fuori pagina, selezionati e restituiti,
+finestre, impostazioni, release, errori, durata, `truncated`, `replayable` e
+limiti interpretativi. Le richieste monitorate sono metadati in ordine inverso
+di arrivo, senza release o impostazioni. Per rieseguire usa un nuovo POST con i
+parametri originali solo se `replayable`; non esiste un endpoint replay/export
+separato. Non c'è autenticazione: consulta
+[diagnostica e privacy](../features/diagnostics).
+
+Il report v2 aggiunge le esecuzioni `strategies` e la `provenance` per identità
+del risultato, con fasi opzionali `search` e `merge`. Descrivono l'esecuzione
+osservata; i dati non disponibili su deduplicazione, rilevanza e inclusione
+rimangono null. Le ricerche per ID esatto riportano corrispondenze della
+finestra osservata, contributi esclusivi, deduplicazione SQL e inclusione XML
+convalidata. Il campo `duration_ms` delle strategie con query condivisa può
+essere null; la durata condivisa viene misurata solo nella fase database. I
+metadati possono includere `source` con valore ammesso `torrent`, `file` o
+`pack_file`, e `match_type=fuzzy`. Sono osservazioni categoriali, non percorsi,
+identificatori dei figli o fiducia numerica. Le strategie film/TV per titolo
+operano insieme agli ID; i conteggi restano limitati alle finestre esaminate e
+agli insiemi fuzzy vincolati. Consulta
+[l'interpretazione diagnostica](../features/diagnostics#esecuzioni-delle-strategie-e-provenienza).
+
+## Stato degli aggiornamenti database
+
+Il campo aggiuntivo `updater.phase` può essere `idle`, `checking`,
+`downloading`, `validating`, `restoring`, `switching`, `up_to_date`, `updated` o
+`failed`. Gli stati finali restano visibili fino alla prossima operazione; gli
+errori non includono eccezioni grezze. `updating` comprende il controllo.
+`next_check` è null durante un'operazione o quando i controlli automatici sono
+disabilitati.
+
+### Aggiornamento manuale
+
+`POST /webapi/database-update` (senza body) restituisce `202` con
+`{ "accepted": true }` dopo aver riservato il lock condiviso, prima del
+completamento in background. Funziona anche con aggiornamenti automatici
+disabilitati. Una richiesta duplicata restituisce `409` con
+`{ "detail": { "code": "update_busy", "message": "A database update is already in progress" } }`.
+Usa `GET /webapi/status` per l'esito; durante la manutenzione può restituire
+`503`. La route richiede una rete fidata come il resto della WebAPI senza
+autenticazione.
 
 ## `GET /webapi/status`
 

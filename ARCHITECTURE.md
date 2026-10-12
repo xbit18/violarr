@@ -29,16 +29,20 @@ runtime container.
 
 ## Modules
 
-| Module | Responsibility |
-| --- | --- |
-| `app.py` | FastAPI lifecycle, Torznab queries/XML, result-processing integration, static WebUI serving |
-| `settings.py` | Schema-v1 validation, atomic persistence, environment precedence, public secret masking |
-| `result_processor.py` | Italian presets and bounded custom score/exclusion rules |
-| `webapi.py` | Same-origin JSON status, settings, processing, and Prowlarr endpoints |
-| `prowlarr.py` | `X-Api-Key` client, Generic Torznab schema derivation, test/create/idempotency |
-| `snapshot_updater.py` | Snapshot discovery, validation, candidate restore, switch, rollback, updater state |
-| `frontend/` | Vue 3 WebUI source and shared product design tokens |
-| `entrypoint.sh` | PostgreSQL bootstrap, first snapshot restore, Uvicorn lifecycle, clean shutdown |
+| Module                  | Responsibility                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `app.py`                | FastAPI lifecycle, Torznab queries/XML, result-processing integration, static WebUI serving     |
+| `settings.py`           | Schema-v1 validation, atomic persistence, environment precedence, public secret masking         |
+| `result_processor.py`   | Italian presets and bounded custom score/exclusion rules                                        |
+| `webapi.py`             | Same-origin JSON status, settings, processing, Prowlarr, and diagnostics endpoints              |
+| `diagnostic_models.py`  | Strict bounded diagnostic inputs and report-v2 response contracts                               |
+| `search_diagnostics.py` | Optional request-scoped stage/window/candidate collection and structural redaction              |
+| `search_monitor.py`     | Failure-isolated Torznab observation and bounded thread-safe in-memory history                  |
+| `search_strategies.py`  | Exact-ID and conservative title/pack SQL, consistency guards, tiered hash merge and memberships |
+| `prowlarr.py`           | `X-Api-Key` client, Generic Torznab schema derivation, test/create/idempotency                  |
+| `snapshot_updater.py`   | Snapshot discovery, validation, candidate restore, switch, rollback, updater state              |
+| `frontend/`             | Vue 3 WebUI source and shared product design tokens                                             |
+| `entrypoint.sh`         | PostgreSQL bootstrap, first snapshot restore, Uvicorn lifecycle, clean shutdown                 |
 
 ## Image build and startup
 
@@ -82,6 +86,102 @@ ElementTree Torznab RSS serialization
 `t=search`, `t=movie`, and `t=tvsearch` retain the v1.0 parameters, categories,
 limits, offset behavior, and XML item shape. The default `unfiltered` preset
 passes `limit` and `offset` directly to the database.
+
+Exact movie and TV searches run each supplied IMDb/TMDB identifier as a
+complementary strategy. NULL metadata does not contradict an identifier, but a
+populated conflicting identifier excludes a candidate. Eligible movie/TV text
+strategies run alongside supplied identifiers, not only after an empty exact
+search. Generic search/browse remains unchanged. IMDb normalization and exact-only
+TV title/season hints are unchanged; qualified TV text now respects `ep`.
+
+`search_strategies.py` builds index-friendly exact branches combined by `UNION ALL`.
+SQL aggregates by `info_hash` before ordering or pagination, then joins back to
+the parent torrent. Production movie/TV ordering uses four tiers: exact parent
+torrent IMDb/TMDB, exact file/pack-child evidence, high-confidence validated text,
+then fuzzy. Within each tier, seeders descend with NULL last, then hash ascends.
+File-qualified TMDB belongs to the second tier because the file supplies episode
+qualification, although TMDB identity evidence still comes from the parent.
+Overlapping memberships remain recorded; their strongest tier determines order.
+Similarity never orders within a tier. All identifier searches use this stream,
+including exact-only TV. The exact-only SQL helper retains its frozen historical
+contract for differential tests, not production relevance ordering.
+Private membership flags are stripped before the seven-field processing/XML
+boundary. There is no independently paginated branch concatenation or dataset-wide
+Python merge. Processed 1000-candidate windows consume this deduplicated stream.
+
+For TV season/episode requests, additional file-backed strategies require the
+same `files` row to provide the qualifying season and episode, joined to its
+parent by `info_hash`. IMDb file matches require that row's exact IMDb identity;
+TMDB file matches require the parent's exact TMDB identity because files have no
+TMDB column. NULL file IMDb is allowed with parent TMDB evidence, not as an
+independent IMDb match. Populated disagreement between request, parent and files,
+or between files of the same torrent, excludes that parent conservatively.
+Valid child episode evidence can recover packs or mismatching parent episode
+metadata; it never replaces parent title, size, category, hash or magnet. There
+is no series equivalence or season remapping (including the distinct Hanno ucciso
+l'Uomo Ragno and Nord Sud Ovest Est identities).
+
+Movie pack strategies join `pack_files.pack_hash` to the parent torrent hash.
+Child IMDb identifies an individual film and may differ from the collection's
+parent identity. `pack_files` has no TMDB; parent TMDB is never attributed to a
+child. Child text is validated against the basename, not directory names, and
+excludes extras/trailers/subtitles and non-video suffixes. All request-derived
+text values are parameter-bound; regex grammar and token-count bounds are internal
+constants. Parent metadata and
+download links are never replaced with child values.
+
+Title queries are limited to 128 characters/12 alphanumeric tokens and require
+at least one discriminating token of three characters. Release-word-only queries
+are withheld; short titles remain searchable by ID. Literal token boundaries
+allow punctuation between words. Fuzzy eligibility additionally requires eight
+alphanumeric characters and a nonnumeric token of at least four characters.
+Existing GIN trigram indexes provide candidates via the `%>>` operator with
+transaction-local strict-word threshold 0.6; postvalidation requires strict-word
+similarity at least 0.75. TV additionally compares the leading series words at
+similarity 0.75 after stripping season/episode suffixes, never matching an episode
+name independently. Season/episode metadata must qualify the parent or one child
+row; title hints alone do not prove an episode for text searches.
+
+Each fuzzy source validates all discovered evidence before selecting up to 2000
+distinct eligible parents, independent of the requested page. Type/identity,
+episode, mixed-series, filename and confidence guards precede this cap. Repeated
+children reduce to their best eligible evidence per parent; multiplicity remains
+private diagnostic evidence. Overflow retains the best parents rather than
+discarding the source. Selection orders title confidence descending, then parent
+seeders descending (NULL last), hash ascending and child key ascending. Movie/pack
+confidence is strict-word similarity against the title/basename; TV confidence is
+the minimum of strict-word and leading-series prefix similarity. No separate
+release-year, quality or language bonuses are added. Confidence affects source
+retention only: final four-tier/seeders/hash ordering and exact/literal behavior
+remain unchanged.
+
+Optional strategy `fuzzy_pool` counts come from the same SQL execution: `found`
+is distinct eligible parents before the cap, `retained` is after the cap,
+`omitted` is their difference, and `truncated` indicates a positive difference.
+Invalid matches are not counted as omissions. These per-source/per-execution
+totals survive empty pages, are not summed across repeated windows, and are
+separate from fetched-window membership/filter counts. Unobserved counts are
+null/absent. A private singleton statistics envelope never becomes a public
+torrent row. Branch durations remain null; report-level truncation/replayability
+is not affected by source truncation. No confidence or child identifiers/paths
+are exported.
+These bounds do not limit index candidate discovery, final aggregation, sort or
+large-offset cost. No full-table similarity ORDER BY, new index, extension install,
+runtime schema mutation, or upstream data correction is introduced. Confidence
+sorting is limited to operator-discovered, guard-qualified evidence, not an
+unrestricted whole-table similarity sort. Confirmed PG16
+pg_trgm 1.6/index coverage applies to the current test schema, not all historical
+snapshots; unsupported schemas produce the existing sanitized database failure.
+
+Fetched rows are bounded; PostgreSQL aggregation and sorting are not bounded by
+the page size. Broad matches, large offsets and per-hash file consistency checks
+can be expensive. Historical ID/hash/composite indexes motivate the exact branches,
+but do not certify current snapshots or query plans. Offline SQLite execution tests
+cover relational structure with dialect adaptation; an opt-in temporary-table
+PostgreSQL test requires an explicitly configured loopback DSN. PostgreSQL execution,
+EXPLAIN, large-dataset performance, Docker runtime and Python 3.12 validation remain
+separate checks when those local environments are unavailable. No schema migration
+or snapshot download is part of this feature.
 
 ### WebUI and WebAPI
 
@@ -162,6 +262,173 @@ and filtered pages are not backfilled from later windows.
 
 This pipeline affects only ICVDB's XML response. It cannot guarantee downstream
 Radarr/Sonarr selection. Hard filters hide results from Prowlarr entirely.
+
+## Application release notification
+
+`application_update.py` owns independent startup/shutdown hooks and an immutable
+in-memory release cache, separate from the snapshot updater and settings. Startup
+schedules an immediate background check without waiting for GitHub; subsequent
+checks run one hour after completion. Bounded stdlib HTTP runs in one owned worker
+at a time: 10-second socket timeout and a bounded read of at most 256 KiB plus one
+byte to detect oversized payloads, independent of `Content-Length`. These bounds
+do not impose a hard total-response or OS DNS deadline. Shutdown signals the loop
+and waits for its in-flight worker instead of cancelling a thread and starting a
+replacement.
+
+Strict stable SemVer compares numeric major/minor/patch, ignores valid build
+metadata for ordering, and accepts an optional `v`. Invalid/unknown/prerelease
+installed versions and explicit dev/development/dirty/snapshot metadata suppress
+checks. GitHub draft/prerelease flags must both be boolean false; tags must be
+stable and `html_url` must equal the exact HTTPS `xbit18/violarr` release URL for
+that tag. Failed, oversized, malformed, timed-out or rate-limited checks preserve
+only the last valid cache; it may become stale. Nothing installs or restarts.
+
+`GET /webapi/application-update` reads only that cache, including during snapshot
+maintenance via a narrow outer middleware. It returns `update_available` and
+nullable `latest_version`/`release_url`; hidden/unavailable state has false/nulls.
+It remains unauthenticated under the existing trusted-network/reverse-proxy
+boundary and has no database/settings dependency. The sidebar polls this local
+endpoint on mount and hourly after completion, with one 15-second early retry if
+initially hidden. Requests are sequential, time-bounded and aborted on unmount;
+quiet refresh failures retain the last validated UI result.
+
+`version.py` reads adjacent `VERSION`, packaged from the checked-out release tag
+in official Docker images. A custom build carrying that same stable value cannot
+be distinguished from an official release using VERSION alone; there is no
+comprehensive branch/provenance detection.
+
+## Database update controls
+
+`POST /webapi/database-update` reserves the existing updater lock before returning
+`202`; duplicates return safe `409 update_busy` details. Manual work bypasses only
+the automatic-enabled setting and shares discovery, digest/dump validation,
+candidate restore/validation, switch and rollback. `GET /webapi/status` adds safe
+`updater.phase` progress and terminal outcomes. Maintenance still returns `503`
+for DB-dependent routes; the application-release cache read bypasses maintenance.
+Sequential WebUI status polling tolerates maintenance without reloading settings.
+
+Idle interval changes recalculate the deadline from reconfiguration time; enabling
+allows a prompt check and disabling clears it. Active configuration changes neither
+cancel nor queue work. All completions use latest effective settings to schedule
+completion plus interval, or no deadline when disabled. Startup delay is retained.
+Shutdown waits for owned worker threads; cancelling `to_thread` alone cannot stop
+database work. Cleanup cannot strand the updater lock. Candidate-rename and version
+record failures restore the previous database within maintenance.
+
+The UI stores unchanged schema-v1 integer seconds (`60..604800` inclusive), displays
+minutes/hours/days, and validates decimal conversion without rounding. Untouched
+legacy values preserve exact seconds across unit switches. Environment overrides
+remain authoritative; `/data` and all compatibility/security boundaries are unchanged.
+
+## Search diagnostics and request monitoring
+
+`/diagnostics` in the Vue WebUI defaults to Search. Its simple/advanced form sends
+`POST /webapi/diagnostics/search` to the same `execute_search()` path as `/api`:
+normalization → database window lookup → existing result processing/pagination →
+ElementTree serialization and observation of the actual RSS root, item count and
+selected identity order. There is no second SQL or filtering implementation. An
+explicit `ObservationFacade` isolates every collector event and processing callback;
+failed XML inspection marks the report partial without replacing the actual response.
+Actual search exceptions still propagate. A narrow `ContextVar` carries only the safe
+facade to existing SQL branch markers; nested `finally` resets it even if observation
+fails. It does not change normal ordering, ignored parameters, subtitle
+correction, settings precedence, or snapshot-switch behavior. `cat` remains accepted
+but unused by queries; TV searches now use `tmdbid` alongside `imdbid`.
+
+Report v2 carries original/normalized allowlisted parameters, a legacy strategy summary,
+four stage statuses/timings, inspected windows, processing settings/indexed rules,
+separate serialization settings, app/snapshot versions, bounded candidate metadata,
+safe errors, truncation/replayability flags and limitations. Counts are window-local,
+not database totals. Candidates may be excluded, retained outside the page, selected
+for serialization, or returned; selected rows become returned only after actual XML
+validation succeeds. Returned language is read from XML, separately from the
+subtitle-correction flag used during processing. Stage failures produce partial
+reports with HTTP `200`: consumers must inspect statuses/errors, not HTTP success.
+Invalid diagnostic JSON produces a safe `422`; maintenance middleware can return
+`503` before diagnostic handlers run.
+
+### Observation interface
+
+This interface observes an engine; it does not execute strategies or merge results.
+Movie/TV coverage executes one shared result SQL statement per window, with
+complementary branches; fuzzy lookups also set a transaction-local threshold.
+Generic queries retain their existing single branch.
+
+| Event                                                                            | Contract                                                                                                                                                |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strategy_begin(identifier, metadata=None)`                                      | Lowercase symbolic identifier (64 characters maximum); metadata accepts only `field`, `match_type` and `source` enum values, never search values or SQL |
+| `strategy_result(DiagnosticResult, occurrence, metadata=None)`                   | Associate the active execution with an opaque identity and distinct occurrence; does not remove duplicate rows                                          |
+| `strategy_complete(status="success", candidates=None, unique_contribution=None)` | Report observed candidate count and success/partial/failed status; ownership stays unavailable unless explicitly observed                               |
+| `result_facts(result, deduplicated=None, relevance=None, included=None)`         | Optional facts from an actual engine observation, never inferred from filter scores or the number of occurrences                                        |
+| `begin("search")` / `begin("merge")`, `complete()`                               | Optional phases alongside the legacy input/database/processing/serialization phases; omitted unless emitted                                             |
+
+Pass these events through `ObservationFacade`, not a raw collector. Existing branch
+markers call `record_strategy()`; `window()` completes that execution and adapts rows
+only for detailed diagnostics. `DiagnosticResult.from_row()` is the sole seven-field
+row adapter for observation; query, processing and RSS paths keep their original rows.
+Exact-ID queries call `merged_begin()` before shared SQL, then `merged_window()`
+with private observed memberships and SQL multiplicity flags. No active legacy
+strategy receives merged rows. Branch timing is `null`, since independent execution
+was not measured; the database stage owns shared timing. Failed shared SQL records
+failed attempts with unavailable counts, while observer faults remain failure-isolated.
+Settings events capture the existing two reads in order: XML settings first, then
+processing settings. No extra settings reads, queries or filtering decisions occur.
+
+Detailed reports retain at most 32 executions and 2000 candidate occurrences/identity
+records. An identity is SHA256 of the exact stored info-hash string, never the raw hash
+or magnet; it remains stable across row order and window offsets. This permits
+correlation, not anonymization. Occurrence IDs (`window_offset:index`) remain separate
+for duplicate-row exclusion, ranking and pagination decisions. Provenance aggregates
+strategy identifiers and bounded categorical match evidence per identity.
+Evidence `source` names the table that supplies the matched field, not the branch
+origin. File IMDb identity comes from `file`; TMDB identity always comes from
+`torrent`, even in a file-backed branch. Observed file memberships separately
+record exact `season` and, for episode branches, `episode` evidence from the same
+file row. These categorical facts do not expose request values as retrieved metadata.
+Exact-ID candidate counts describe the fetched hash-deduplicated window. Branch
+counts are observed memberships, not pre-limit totals; unique contribution is the
+number belonging exclusively to that branch in the window. Safe evidence adds
+`source` (`torrent`, `file`, or `pack_file`) to exact IMDb/TMDB or title field metadata.
+Fuzzy evidence is categorical, never a child path/ID or numeric confidence. SQL multiplicity
+records whether multiple branch matches were collapsed; `EXISTS` prevents file
+fan-out without inventing raw file counts. Inclusion is confirmed only after XML
+validation. Relevance remains `null`: processing `score` is a preset/rule score,
+not search confidence. Generic counts include repeated occurrences
+and keep unavailable provenance facts. Metadata-only monitoring computes branch
+window counts but never adapts/hashes rows or retains release/provenance records.
+
+The browser accepts and exports v1 and v2 reports using version-aware scalar allowlists;
+the server emits v2. Request-history export retains its independent version `1` and
+adds bounded strategy execution metadata, never result provenance. Disabled collection
+does not adapt/hash rows, collect rule histories or inspect XML; metadata-only monitoring
+does not adapt/hash rows or inspect XML. Detailed XML inspection is capped at 4 MB.
+
+Requests uses `GET/PUT /webapi/diagnostics/monitoring` and
+`GET/DELETE /webapi/diagnostics/requests`. Monitoring defaults off and is runtime-only.
+A lock-protected buffer stores at most 100 arrival-newest-first metadata entries;
+slow older completions cannot evict newer arrivals. No release sets, headers, client
+addresses, keys, magnets, SQL, raw exceptions or database configuration are retained.
+Observation faults do not replace the original Torznab response. Disabling capture
+preserves existing history; clearing removes it; restart clears history and state.
+The browser polls sequentially every five seconds only in Requests and aborts/guards
+pending refreshes when leaving, clearing or toggling. It cancels outstanding work on
+unmount so stale refreshes cannot restore cleared data.
+
+Replay is a fresh diagnostic POST using a replayable entry's **original** parameters,
+including intentionally ignored fields. Current settings and the current local
+snapshot apply; historical conditions are not reconstructed. Diagnostic executions
+and replays are not added to incoming-request history.
+
+Export is browser-local JSON, not a new server endpoint or external service. The UI
+projects the versioned allowlist at every level, applies structural redaction, bounds
+arrays/text and rejects downloads over 4 MB. It presents the exact export preview
+and a sharing warning before download. Titles, terms and rule values can still be
+sensitive: structural sanitization does not make a report anonymous. Existing
+trusted-network/authenticated-proxy deployment requirements apply to execution,
+monitoring controls/history and reports, since these endpoints have no authentication.
+No settings migration, persistent logs, new containers or privileged remote execution
+are introduced. Diagnostics cannot compare live Stremio content or identify downstream
+Sonarr/Radarr/Prowlarr rejection reasons.
 
 ## Snapshot invariants
 

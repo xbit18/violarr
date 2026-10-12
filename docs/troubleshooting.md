@@ -45,6 +45,17 @@ nella direzione opposta, Prowlarr → Violarr.
 
 ## Mancano risultati attesi
 
+Apri **[Diagnostica](./features/diagnostics) → Ricerca** per distinguere
+ricerca, filtri e output XML validato senza cambiare le impostazioni. Se il
+problema appare solo nei client, abilita il monitoraggio in **Richieste**,
+esamina i parametri reali e rieseguili. La riesecuzione usa lo stato attuale,
+non quello storico.
+
+Lo snapshot locale può differire dai risultati live di Stremio. Nessun candidato
+nelle finestre esaminate non prova l'assenza dall'intero database. Una risposta
+Torznab valida non spiega da sola il rifiuto di Sonarr/Radarr. Prima di
+condividere un report, controlla titoli e termini di ricerca nell'anteprima.
+
 - `italian_only` e le regole di esclusione sono filtri rigidi.
 - L'ordinamento è locale a finestre di 1000 righe.
 - L'elaborazione non garantisce la selezione di Radarr o Sonarr.

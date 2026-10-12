@@ -30,7 +30,7 @@ def test_caps_contract_is_unchanged(client):
     assert root.find("limits").attrib == {"max": "200", "default": "100"}
     assert root.find("searching/search").attrib["supportedParams"] == "q"
     assert root.find("searching/movie-search").attrib["supportedParams"] == "q,imdbid,tmdbid"
-    assert root.find("searching/tv-search").attrib["supportedParams"] == "q,season,ep,imdbid"
+    assert root.find("searching/tv-search").attrib["supportedParams"] == "q,season,ep,imdbid,tmdbid"
     assert root.find("server").attrib["title"] == "Violarr"
 
 
@@ -68,7 +68,7 @@ def test_rss_channel_uses_violarr_branding(client, monkeypatch):
                 "offset": 4,
             },
             "query_tv",
-            ("tt456", "show", 2, 3, 20, 4),
+            ("tt456", "show", 2, 3, None, 20, 4),
         ),
     ],
 )

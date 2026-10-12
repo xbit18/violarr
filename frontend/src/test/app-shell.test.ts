@@ -3,11 +3,17 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppShell from '../components/AppShell.vue'
 import { LOCALE_STORAGE_KEY, useLocale } from '../i18n'
+import { api } from '../api/client'
 
 describe('mobile application shell', () => {
   beforeEach(() => {
     localStorage.clear()
     useLocale().setLocale('it')
+    vi.spyOn(api, 'applicationUpdate').mockResolvedValue({
+      update_available: true,
+      latest_version: '1.10.0',
+      release_url: 'https://github.com/xbit18/violarr/releases/tag/v1.10.0',
+    })
   })
   it('traps focus, closes on Escape, returns focus, and focuses content after navigation', async () => {
     vi.stubGlobal(
@@ -23,6 +29,7 @@ describe('mobile application shell', () => {
         { path: '/result-processing', component: { template: '<p>Results</p>' } },
         { path: '/prowlarr', component: { template: '<p>Prowlarr</p>' } },
         { path: '/advanced', component: { template: '<p>Advanced</p>' } },
+        { path: '/diagnostics', component: { template: '<p>Diagnostics</p>' } },
       ],
     })
     await router.push('/')
@@ -30,7 +37,15 @@ describe('mobile application shell', () => {
     render(AppShell, { global: { plugins: [router] } })
     const menu = screen.getByRole('button', { name: 'Apri navigazione' })
     await fireEvent.click(menu)
-    const links = screen.getByRole('navigation').querySelectorAll('a')
+    expect(screen.getByRole('link', { name: 'Diagnostica' }).getAttribute('href')).toBe(
+      '/diagnostics',
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: 'v1.10.0 disponibile' })).toBeTruthy(),
+    )
+    const links = document.querySelectorAll<HTMLAnchorElement>('.sidebar a')
+    expect(links[links.length - 1].getAttribute('target')).toBe('_blank')
+    expect(document.querySelector('.sidebar-note')?.textContent).toBe(useLocale().t('app.subtitle'))
     expect(document.activeElement).toBe(links[0])
     menu.focus()
     await fireEvent.keyDown(document, { key: 'Tab' })
@@ -49,7 +64,7 @@ describe('mobile application shell', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('main')))
   })
 
-  it('starts in Italian and persists an accessible English selection', async () => {
+  it('styles native language and theme selects and persists accessible selections', async () => {
     vi.stubGlobal(
       'matchMedia',
       vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -66,7 +81,22 @@ describe('mobile application shell', () => {
     expect(logo?.getAttribute('src')).toBe('/logo.png')
     expect(logo?.getAttribute('alt')).toBe('')
     expect(screen.getByRole('link', { name: 'Panoramica' })).toBeTruthy()
-    await fireEvent.update(screen.getByRole('combobox', { name: 'Lingua' }), 'en')
+    const language = screen.getByRole('combobox', { name: 'Lingua' }) as HTMLSelectElement
+    const theme = screen.getByRole('combobox', { name: 'Tema colore' }) as HTMLSelectElement
+    for (const select of [language, theme]) {
+      expect(select.tagName).toBe('SELECT')
+      expect(select.classList.contains('input-select')).toBe(true)
+    }
+    expect(theme.value).toBe('system')
+    await fireEvent.update(theme, 'dark')
+    expect(theme.value).toBe('dark')
+    expect(localStorage.getItem('icvdb-theme')).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    await fireEvent.update(theme, 'light')
+    expect(document.documentElement.dataset.theme).toBe('light')
+    await fireEvent.update(theme, 'system')
+    expect(localStorage.getItem('icvdb-theme')).toBeNull()
+    await fireEvent.update(language, 'en')
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBeTruthy()
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en')
     expect(document.documentElement.lang).toBe('en')

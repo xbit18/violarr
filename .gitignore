@@ -27,3 +27,4 @@ frontend/*.tsbuildinfo
 node_modules/
 
 odd/
+openspec/

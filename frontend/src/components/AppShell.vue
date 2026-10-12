@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { navigation } from '../composables/navigation'
 import { createThemeController } from '../composables/theme'
 import { useLocale, type Locale } from '../i18n'
+import ApplicationUpdateNotification from './ApplicationUpdateNotification.vue'
 
 const route = useRoute()
 const theme = createThemeController()
@@ -77,6 +78,7 @@ const links = [
   ['/database', 'navigation.database'],
   ['/result-processing', 'navigation.results'],
   ['/prowlarr', 'Prowlarr'],
+  ['/diagnostics', 'common.diagnostics'],
   ['/advanced', 'navigation.advanced'],
 ] as const
 </script>
@@ -103,6 +105,7 @@ const links = [
       <label class="language-select"
         ><span class="sr-only">{{ locale.t('language.label') }}</span
         ><select
+          class="input-select"
           :aria-label="locale.t('language.label')"
           :value="locale.current.value"
           @change="locale.setLocale(($event.target as HTMLSelectElement).value as Locale)"
@@ -114,6 +117,7 @@ const links = [
       <label class="theme-select"
         ><span class="sr-only">{{ locale.t('theme.label') }}</span
         ><select
+          class="input-select"
           :aria-label="locale.t('theme.label')"
           :value="theme.preference.value"
           @change="
@@ -148,7 +152,10 @@ const links = [
           label === 'Prowlarr' ? label : locale.t(label)
         }}</RouterLink>
       </nav>
-      <p class="sidebar-note">{{ locale.t('app.subtitle') }}</p>
+      <div class="sidebar-footer">
+        <ApplicationUpdateNotification />
+        <p class="sidebar-note">{{ locale.t('app.subtitle') }}</p>
+      </div>
     </aside>
     <main id="main-content" ref="main" class="main" tabindex="-1"><RouterView /></main>
   </div>

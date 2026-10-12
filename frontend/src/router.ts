@@ -5,6 +5,7 @@ import DatabaseUpdatesView from './views/DatabaseUpdatesView.vue'
 import ResultProcessingView from './views/ResultProcessingView.vue'
 import ProwlarrView from './views/ProwlarrView.vue'
 import AdvancedView from './views/AdvancedView.vue'
+import DiagnosticsView from './views/DiagnosticsView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -15,5 +16,6 @@ export const router = createRouter({
     { path: '/result-processing', component: ResultProcessingView },
     { path: '/prowlarr', component: ProwlarrView },
     { path: '/advanced', component: AdvancedView },
+    { path: '/diagnostics', component: DiagnosticsView },
   ],
 })

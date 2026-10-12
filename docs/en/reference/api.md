@@ -22,7 +22,83 @@ The service exposes three HTTP surfaces on port `8000`.
 | `POST` | `/webapi/prowlarr/indexer`  | Creation or existing-indexer result           | `400`, `502`           |
 
 During the brief snapshot database switch, middleware can return HTTP `503` with
-`Retry-After: 5` for any route before its normal handler runs.
+`Retry-After: 5` before normal handlers run, except the DB-independent cache
+read `GET /webapi/application-update`.
+
+## `GET /webapi/application-update`
+
+Returns only the in-memory cache, without contacting GitHub or PostgreSQL:
+
+```json
+{
+  "update_available": true,
+  "latest_version": "1.10.0",
+  "release_url": "https://github.com/xbit18/violarr/releases/tag/v1.10.0"
+}
+```
+
+Hidden/unavailable state is `update_available: false` with both other fields
+null. Only a newer stable release and an exact HTTPS repository release URL
+matching its tag produce a link. Checks run in the background at startup and
+hourly; failures preserve the last valid cache, which may be stale. This does
+not update the application or snapshots. Like the rest of the WebAPI, it has no
+authentication: use a trusted network or an authenticated reverse proxy.
+
+## Diagnostics
+
+| Method           | Path                             | Contract                                                         |
+| ---------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `POST`           | `/webapi/diagnostics/search`     | Report v2; stages may fail despite HTTP `200`                    |
+| `GET` / `PUT`    | `/webapi/diagnostics/monitoring` | `{enabled,capacity,count}`; PUT accepts only `{enabled:boolean}` |
+| `GET` / `DELETE` | `/webapi/diagnostics/requests`   | `{requests:[...]}`; DELETE clears history                        |
+
+Search accepts only `t` (`search`, `movie`, `tvsearch`), `q`, `imdbid`,
+`tmdbid`, `season`, `ep`, `cat`, `limit` and `offset`. Strings: at most 512
+characters; TMDb/season/episode: integers ±1000000000 or null; limit: 1–200
+(default 100); offset: 0–1000000 (default 0). Unknown fields, wrong types and
+out-of-range values return safe `422` detail
+`{code:invalid_parameters,message:Invalid diagnostic parameters}`.
+
+The report includes versions, timestamp, original/normalized parameters,
+strategy, input/database/processing/serialization stage status/timing,
+candidate, excluded, retained, outside-page, selected and returned counts,
+windows, settings, releases, errors, duration, `truncated`, `replayable` and
+interpretation limitations. Monitored requests are arrival-newest-first metadata
+without releases or settings. Replay is a new POST with original parameters only
+when `replayable`; there is no separate replay/export endpoint. There is no
+authentication: see [diagnostics and privacy](../features/diagnostics).
+
+Report v2 adds `strategies` execution records and `provenance` per result
+identity, with optional `search` and `merge` stages. These describe observed
+execution; unavailable deduplication, relevance and inclusion facts remain null.
+Exact-ID searches report observed window memberships, exclusive contributions,
+SQL deduplication and validated XML inclusion. Shared-query strategy
+`duration_ms` is nullable; the shared duration is measured only at the database
+stage. Match metadata may include allowlisted `source` (`torrent`, `file` or
+`pack_file`) and `match_type=fuzzy`. These are categorical observations, not
+child paths/identifiers or numeric confidence. Movie/TV title strategies run
+alongside IDs; counts remain limited to inspected windows and bounded fuzzy
+pools. See
+[diagnostic interpretation](../features/diagnostics#strategy-executions-and-provenance).
+
+## Database update progress
+
+`updater.phase` is additive: `idle`, `checking`, `downloading`, `validating`,
+`restoring`, `switching`, `up_to_date`, `updated`, or `failed`. Terminal phases
+remain visible until the next operation; errors contain no raw exception
+details. `updating` includes discovery. `next_check` is null during active work
+or when disabled.
+
+### Manual database update
+
+`POST /webapi/database-update` (no body) returns `202` with
+`{ "accepted": true }` after reserving the shared updater lock, before
+background work finishes. It works with automatic updates disabled. A duplicate
+returns `409` with
+`{ "detail": { "code": "update_busy", "message": "A database update is already in progress" } }`.
+Poll `GET /webapi/status` for the outcome; maintenance may temporarily return
+`503`. This route has the same trusted-network requirement as the rest of the
+unauthenticated WebAPI.
 
 ## `GET /webapi/status`
 

@@ -3,12 +3,62 @@ import threading
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 
+from application_update import HIDDEN
+from diagnostic_models import (
+    MonitoringInput,
+    MonitoringStatus,
+    RequestHistory,
+    SearchInput,
+    SearchReport,
+)
 from prowlarr import ProwlarrClient, ProwlarrError
 from settings import SettingsError
 
 WEBAPI_VERSION = 1
 _UNCHANGED = object()
+
+
+class _SafeDiagnosticsRoute(APIRoute):
+    def get_route_handler(self):
+        original = super().get_route_handler()
+
+        async def handle(request):
+            try:
+                if self.path.startswith("/webapi/diagnostics/") and self.body_field is not None:
+                    content_type = (
+                        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    )
+                    if (
+                        not content_type
+                        or content_type == "application/json"
+                        or (
+                            content_type.startswith("application/")
+                            and content_type.endswith("+json")
+                        )
+                    ) and await request.body():
+                        # Parse before FastAPI converts decoding failures to generic HTTP 400.
+                        # Catch only JSON body errors, never errors raised by the endpoint.
+                        try:
+                            await request.json()
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            raise RequestValidationError([]) from None
+                return await original(request)
+            except RequestValidationError:
+                if not self.path.startswith("/webapi/diagnostics/"):
+                    raise
+                # Default validation details echo rejected input, including secrets.
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "invalid_parameters",
+                        "message": "Invalid diagnostic parameters",
+                    },
+                ) from None
+
+        return handle
 
 
 class _ProwlarrStateCache:
@@ -128,8 +178,34 @@ def _live_prowlarr_status(request: Request) -> dict[str, Any]:
 
 
 def create_webapi_router() -> APIRouter:
-    router = APIRouter(prefix="/webapi", tags=["webapi"])
+    router = APIRouter(prefix="/webapi", tags=["webapi"], route_class=_SafeDiagnosticsRoute)
     prowlarr_cache = _ProwlarrStateCache()
+
+    @router.get("/application-update")
+    async def application_update(request: Request):
+        checker = getattr(request.app.state, "application_update", None)
+        return (checker.snapshot() if checker is not None else HIDDEN).public()
+
+    @router.post("/diagnostics/search", response_model=SearchReport)
+    def diagnostic_search(request: Request, parameters: SearchInput):
+        return request.app.state.diagnostic_search(parameters.model_dump())
+
+    @router.get("/diagnostics/monitoring", response_model=MonitoringStatus)
+    def monitoring_status(request: Request):
+        return request.app.state.search_monitor.status()
+
+    @router.put("/diagnostics/monitoring", response_model=MonitoringStatus)
+    def configure_monitoring(request: Request, parameters: MonitoringInput):
+        return request.app.state.search_monitor.configure(parameters.enabled)
+
+    @router.get("/diagnostics/requests", response_model=RequestHistory)
+    def monitored_requests(request: Request):
+        return {"requests": request.app.state.search_monitor.recent()}
+
+    @router.delete("/diagnostics/requests", response_model=RequestHistory)
+    def clear_monitored_requests(request: Request):
+        request.app.state.search_monitor.clear()
+        return {"requests": []}
 
     @router.get("/status")
     def get_status(request: Request):
@@ -154,6 +230,18 @@ def create_webapi_router() -> APIRouter:
     @router.get("/settings")
     def get_settings(request: Request):
         return _store(request).public()
+
+    @router.post("/database-update", status_code=202)
+    async def trigger_database_update(request: Request):
+        if not await request.app.state.snapshot_updater.trigger_manual():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "update_busy",
+                    "message": "A database update is already in progress",
+                },
+            )
+        return {"accepted": True}
 
     @router.put("/settings")
     def put_settings(request: Request, settings: Any = Body(...)):
