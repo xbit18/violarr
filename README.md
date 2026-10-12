@@ -27,6 +27,10 @@
 
 </div>
 
+<p align="center">
+  <img src="assets/readme-hero.png" alt="Violarr: ricerca intelligente per contenuti italiani" width="100%">
+</p>
+
 ## Funzionalità
 
 - Cerca film, serie TV e anime da Prowlarr.
