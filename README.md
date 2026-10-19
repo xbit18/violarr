@@ -80,3 +80,6 @@ Consulta la [guida per contribuire](CONTRIBUTING.md), disponibile in inglese.
 ## Licenza
 
 MIT
+
+## Ringraziamenti
+Si ringrazia il progetto *Il Corsaro Viola* e l'utente [qwertyuiop8899](https://github.com/qwertyuiop8899) per la collaborazione
