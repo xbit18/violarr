@@ -80,3 +80,6 @@ See the [contributing guide](CONTRIBUTING.md) for the project workflow.
 ## License
 
 MIT
+## Acknowledgments
+
+Special thanks to the *Il Corsaro Viola* project and [qwertyuiop8899](https://github.com/qwertyuiop8899) for their collaboration.
