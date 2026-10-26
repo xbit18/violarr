@@ -13,24 +13,24 @@
     "typecheck": "vue-tsc -b"
   },
   "dependencies": {
-    "vue": "^3.5.22",
+    "vue": "^3.5.44",
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@testing-library/vue": "^8.1.0",
     "@types/node": "^24.5.2",
-    "@vitejs/plugin-vue": "^6.0.1",
+    "@vitejs/plugin-vue": "^6.0.10",
     "eslint": "^10.12.0",
     "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.13.0",
-    "jsdom": "^30.0.1",
-    "prettier": "^3.6.2",
+    "jsdom": "^30.1.2",
+    "prettier": "^3.9.10",
     "type-fest": "2.19.0",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.71.1",
-    "vite": "^8.2.2",
-    "vitest": "^4.1.11",
-    "vue-tsc": "^3.0.7"
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^4.1.12",
+    "vue-tsc": "^3.3.13"
   }
 }
